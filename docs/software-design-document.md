@@ -5,7 +5,7 @@
 | Attribute | Value |
 | --- | --- |
 | Status | Draft |
-| Version | 0.1 |
+| Version | 0.2 |
 | Last updated | 2026-08-12 |
 | Intended audience | Implementers and maintainers |
 
@@ -13,7 +13,7 @@
 
 Asset Library Manager is a local web application for importing, organizing, describing, searching, and retrieving image assets. It is intended for a single trusted user and is not designed to be published on the Internet or exposed to a local network.
 
-The application is implemented in Go and distributed as one self-contained executable. The executable embeds the web UI, HTMX library, styles, templates, and database migrations. Runtime state consists of a required JSON configuration file, a SQLite database, an incoming directory, and a processed-assets directory located beside the executable. OpenAI is the only external runtime service.
+The application is implemented in Go 1.26 or newer and distributed as one self-contained executable. The executable embeds the web UI, HTMX library, styles, templates, and database migrations. Runtime state consists of a required JSON configuration file, a SQLite database, an incoming directory, and a processed-assets directory located beside the executable. OpenAI is the only external runtime service.
 
 This document defines the v1 behavior and the boundaries within which implementation decisions may be made.
 
@@ -46,7 +46,7 @@ The following are outside v1:
 - Automatic filesystem watching or a manual rescan command.
 - Asset deletion through the UI.
 - AI reanalysis through the UI.
-- Editing or transforming original image pixels beyond thumbnail generation.
+- Editing or transforming managed original image pixels. Thumbnail generation and a bounded, transient AI-analysis rendition are permitted; neither changes the managed original.
 - Moving or renaming managed files after metadata is manually edited.
 
 ## 3. Definitions
@@ -92,7 +92,7 @@ All application paths are resolved from the application root, not the shell's cu
       <title-slug>--<sha256-prefix>.<ext>
 ```
 
-The application creates `incoming/`, `processed/`, and `processed/.staging/` when they do not exist. `config.json` is required. The database is created and migrated automatically.
+The application creates `incoming/`, `processed/`, and `processed/.staging/` when they do not exist. `config.json` is required. The database is created and migrated automatically. After startup validation, all routine incoming and processed-file operations use Go's root-scoped filesystem API (`os.Root`) with validated relative paths; string-prefix containment checks are not a security boundary.
 
 The application must reject configuration in which paths overlap, escape the application root, refer through symlinks outside the application root, or cause `incoming/`, `processed/`, and the database to alias one another.
 
@@ -133,10 +133,12 @@ The application must reject configuration in which paths overlap, escape the app
 | NFR-007 | Never log the OpenAI API key or expose it to the browser. |
 | NFR-008 | Use bounded memory, archive, image, retry, and concurrency limits. |
 | NFR-009 | Emit structured operational logs to standard error and retain user-visible import errors in SQLite. |
+| NFR-010 | Shut down cooperatively: stop accepting new work, cancel and join every application goroutine, preserve recoverable import state, and close resources in dependency order. |
+| NFR-011 | Pin and verify the Go module dependency graph, and gate releases on tests, race detection, static analysis, and reachable-vulnerability scanning. |
 
 ## 6. Architecture
 
-The application is a modular monolith. Modules communicate through small Go interfaces so filesystem, OpenAI, SQLite, and OS behavior can be tested independently.
+The application is a modular monolith with manual constructor injection. Interfaces are defined by the package that consumes them, kept to the smallest useful contract, and introduced only at real test or implementation boundaries. Constructors return concrete types. The composition root owns process lifecycle and wires filesystem, OpenAI, SQLite, and OS adapters explicitly; packages must not use service locators, mutable globals, or side-effecting `init` functions.
 
 ```mermaid
 flowchart TB
@@ -168,66 +170,108 @@ flowchart TB
 
 | Module | Responsibilities |
 | --- | --- |
-| Bootstrap | Locate the executable, load and validate configuration, create managed directories, open SQLite, apply migrations, start HTTP, run recovery, and initiate the single scan. |
+| Bootstrap | Locate the executable, load and validate configuration, create managed directories, open SQLite, apply migrations, construct dependencies, run recovery, start HTTP and the single scan, coordinate signals, and shut down in dependency order. |
 | HTTP/UI | Render full pages and HTMX fragments, validate form input, enforce CSRF and host rules, stream downloads, and expose catalog and processing views. |
 | Import coordinator | Discover sources, create import records, schedule bounded work, enforce state transitions, aggregate ZIP outcomes, and decide source deletion. |
-| Image inspector | Validate magic bytes, decode metadata safely, apply display orientation, count frames, detect alpha, calculate dominant colors, and create thumbnails. |
+| Image inspector | Validate magic bytes, decode metadata safely, apply display orientation, count frames, detect alpha, calculate dominant colors, and create bounded thumbnail and AI-analysis renditions. |
 | OpenAI analyzer | Build vision requests, request structured output, classify retryable errors, validate responses, and retain provenance. |
-| File organizer | Stage bytes, generate safe final paths, atomically rename files, reconcile filesystem state, and delete eligible sources. |
-| SQLite repositories | Own transactions, queries, full-text indexing, pagination, migrations, and persistence of import and AI state. |
+| File organizer | Use root-scoped paths, durably stage and hash bytes, generate safe final paths, promote without unrelated overwrite, reconcile filesystem state, and delete verified eligible sources. |
+| SQLite repositories | Own connection configuration, writer serialization, transactions, queries, full-text indexing, pagination, migrations, and persistence of import and AI state. |
 | OS file revealer | Reveal a database-resolved managed file with OS-specific commands without invoking a shell. |
 
 ### 6.2 Implementation boundaries
 
 - Use `go:embed` for templates, HTMX, CSS, icons, and SQL migrations.
-- Vendor or otherwise compile all Go dependencies into the executable.
+- Target Go 1.26 and use the latest supported Go 1.26 patch release in builds. As of this revision, Go 1.26 is the current stable line and the [Go 1.27 release notes](https://go.dev/doc/go1.27) are still marked draft; do not depend on draft Go 1.27 behavior. Track patch releases through the official [Go release history](https://go.dev/doc/devel/release).
+- Use one module whose path matches the repository, commit `go.sum`, and compile all runtime dependencies into the executable. Vendoring is optional, not a substitute for checksum verification.
 - Use a pure-Go SQLite driver built with FTS5 support.
 - Use Go's `html/template` auto-escaping for HTML.
 - Avoid inline scripts so a restrictive Content Security Policy can be applied.
-- Use dependency injection through constructors; global mutable state is prohibited except for immutable embedded resources.
-- Use `context.Context` for cancellation and timeouts on HTTP, processing, filesystem, database, and OpenAI operations.
+- Use explicit constructors and manual dependency injection at the composition root. Global mutable state is prohibited; package-level immutable embedded resources and compiled regular expressions are allowed.
+- Accept `context.Context` as the first parameter at cancellation-aware boundaries and propagate the caller's context unchanged. Do not store contexts in structs or create `context.Background()` inside a request or import path.
+- Filesystem APIs that do not natively accept a context must check cancellation before opening, between bounded streaming chunks, and before durable state transitions. A context parameter does not imply that a single blocking operating-system call can be interrupted.
+- Prefer the standard library. Any third-party runtime dependency requires a recorded rationale, compatible license, maintained upstream, pure-Go cross-platform support, and review of its effect on binary size and attack surface.
 
-### 6.3 Core Go interfaces
+### 6.3 Package and dependency direction
 
-The exact package layout is deferred, but implementations must preserve interfaces equivalent to the following:
+The initial package layout should remain small and domain-oriented:
+
+```text
+cmd/asset-library-manager/      minimal main package and composition root
+internal/app/                   lifecycle, startup, shutdown, and recovery orchestration
+internal/config/                JSON loading and validated configuration
+internal/catalog/               catalog queries and metadata use cases
+internal/importer/              discovery, state machine, workers, and source aggregation
+internal/imageinspect/          technical inspection and derived renditions
+internal/openai/                Responses API adapter and response validation
+internal/sqlite/                migrations, transactions, repositories, and FTS5
+internal/storage/               root-scoped staging, promotion, verification, and deletion
+internal/web/                   handlers, templates, middleware, and embedded assets
+internal/platform/              operating-system reveal adapter
+internal/testsupport/           shared test builders and fixtures only
+```
+
+`cmd` contains wiring and exit-code handling, not business logic. Application and domain packages may depend on consumer-owned ports and standard-library types; adapters depend inward on those contracts. Packages named `utils`, `common`, `helpers`, or `models` are prohibited because they obscure ownership. No public `pkg/` tree is needed for this application.
+
+The initial dependency strategy is manual constructor injection. A DI framework, ORM, logging framework, or general-purpose web framework must not be introduced without an SDD or architecture-decision update demonstrating a concrete need.
+
+### 6.4 Core Go interfaces
+
+Interfaces live beside their consumers. Representative contracts are:
 
 ```go
-type AssetRepository interface {
-    FindByDigest(ctx context.Context, sha256 string) (*Asset, error)
-    CreateStaged(ctx context.Context, input CreateAssetInput) (Asset, error)
-    MarkReady(ctx context.Context, assetID string, managedPath string) error
+// Defined by the importer, implemented by the SQLite adapter.
+type ReadyAssetFinder interface {
+    FindReadyByDigest(ctx context.Context, digest [sha256.Size]byte) (AssetRef, error)
+}
+
+type AssetStager interface {
+    CreateStaged(ctx context.Context, input CreateAssetInput) (StagedAsset, error)
+    MarkReady(ctx context.Context, assetID AssetID, managedPath string) error
+}
+
+// Defined by the catalog use case, implemented by the SQLite adapter.
+type CatalogReader interface {
     Search(ctx context.Context, query AssetQuery) (Page[AssetSummary], error)
-    Get(ctx context.Context, assetID string) (AssetDetail, error)
-    UpdateSemanticMetadata(ctx context.Context, assetID string, edit MetadataEdit) error
+    Get(ctx context.Context, assetID AssetID) (AssetDetail, error)
+}
+
+type MetadataUpdater interface {
+    UpdateSemanticMetadata(ctx context.Context, assetID AssetID, edit MetadataEdit) error
 }
 
 type Analyzer interface {
     Analyze(ctx context.Context, image ImageInput) (AnalysisResult, AnalysisProvenance, error)
 }
 
-type ImageInspector interface {
-    Inspect(ctx context.Context, source io.Reader, limits ImageLimits) (TechnicalMetadata, error)
-    Thumbnail(ctx context.Context, source io.Reader, maxDimension int) (PNGThumbnail, error)
+type Inspector interface {
+    Inspect(ctx context.Context, source io.ReadSeeker, limits ImageLimits) (Inspection, error)
 }
 
-type FileOrganizer interface {
-    Stage(ctx context.Context, input ImportInput) (StagedFile, error)
-    Commit(ctx context.Context, staged StagedFile, destination ManagedPath) error
+type Stager interface {
+    Stage(ctx context.Context, source io.Reader, limits StageLimits) (StagedFile, error)
+    Promote(ctx context.Context, staged StagedFile, destination ManagedPath) error
+}
+
+type Revealer interface {
     Reveal(ctx context.Context, managedPath ManagedPath) error
 }
 ```
 
-Database errors must distinguish not-found and conflict cases. External-service errors must distinguish retryable, permanent, refused, invalid-response, and configuration failures.
+`Inspection` contains technical metadata, the PNG thumbnail, and the bounded AI-analysis rendition so the staged file is not repeatedly decoded by unrelated components. Value types represent validated IDs, digests, states, and managed relative paths; the zero value of enum-like state types is `unknown` and is never a valid persisted state.
+
+Repository errors must expose not-found and conflict semantics through `errors.Is`. External-service failures use typed errors inspectable with `errors.Is` or `errors.As` and distinguish retryable, permanent, refused, invalid-response, configuration, cancellation, and deadline failures. Implementations wrap errors with `%w`; an error is logged once at the outer boundary that handles it, not at every layer it crosses.
 
 ## 7. Configuration
 
-`config.json` must be valid JSON and is loaded once at startup. Configuration reload requires an application restart. Unknown fields are rejected to catch misspellings.
+`config.json` must be valid JSON and is loaded once at startup through a size-limited reader. Configuration reload requires an application restart. Unknown fields, duplicate object keys, trailing JSON values, and non-finite or overflowing numbers are rejected so ambiguous configuration never reaches runtime.
 
 ```json
 {
   "server": {
     "host": "127.0.0.1",
-    "port": 7342
+    "port": 7342,
+    "shutdown_timeout_seconds": 15
   },
   "storage": {
     "database": "assets.db",
@@ -237,6 +281,8 @@ Database errors must distinguish not-found and conflict cases. External-service 
   "processing": {
     "workers": 2,
     "thumbnail_max_dimension": 320,
+    "analysis_max_dimension": 1536,
+    "max_analysis_bytes": 20971520,
     "max_source_bytes": 536870912,
     "max_image_pixels": 100000000,
     "archive": {
@@ -261,20 +307,38 @@ Database errors must distinguish not-found and conflict cases. External-service 
 
 - `server.host` must parse as an IPv4 or IPv6 loopback address. Wildcard, LAN, and public addresses are invalid.
 - `server.port` must be between 1 and 65535.
+- `server.shutdown_timeout_seconds` must be positive and is capped by a hard implementation ceiling.
 - Storage paths must be non-empty, relative, normalized paths contained by the application root.
 - Storage paths must not overlap or resolve through symlinks outside the application root.
 - Worker and size limits must be positive and within implementation-defined hard safety ceilings.
 - `thumbnail_max_dimension` defaults to and must not exceed 320 in v1.
+- `analysis_max_dimension` defaults to 1536 and bounds the longest side of the transient AI rendition; `max_analysis_bytes` bounds its encoded size. Neither rendition is upscaled.
 - `reasoning_effort` accepts values supported by the configured model; configuration validation may defer model-specific rejection to the API.
 - `image_detail` accepts `low`, `high`, or `auto`.
 - Retry attempts include the initial attempt and must be between 1 and 10.
 - `OPENAI_API_KEY` is read from the process environment, never from JSON.
 
-The sample model is not a permanent compatibility promise. As of this document's date, the official OpenAI model documentation describes GPT-5.6 Terra as balancing intelligence and cost and lists image input, the Responses endpoint, Structured Outputs, and `medium` as the default reasoning effort. The model and effort remain configuration values so they can change without rebuilding the application. See [GPT-5.6 Terra in the official OpenAI documentation](https://developers.openai.com/api/docs/models/gpt-5.6-terra).
+The sample model is not a permanent compatibility promise. As of this document's date, the official OpenAI model documentation describes GPT-5.6 Terra as balancing intelligence and cost and lists image input, the Responses endpoint, Structured Outputs, and `medium` as the default reasoning effort. The model and effort remain configuration values so they can change without rebuilding the application. Because GPT-5.6 may preserve original image dimensions for `auto` detail, the application always sends the locally bounded analysis rendition rather than an unbounded managed original. See [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) and [GPT-5.6 model guidance](https://developers.openai.com/api/docs/guides/latest-model) in the official OpenAI documentation.
 
 ### 7.2 Startup behavior
 
 Fatal configuration, directory, migration, or database errors prevent startup and are written to standard error. A missing or empty `OPENAI_API_KEY` is not fatal: the catalog starts, the UI displays a persistent configuration banner, discovered sources are recorded as blocked, and no source is deleted.
+
+### 7.3 Process lifecycle
+
+`main` creates one root context with `signal.NotifyContext` for interrupt and termination signals and calls an application `Run(ctx)` method. Every long-lived goroutine belongs to that run: the HTTP server, scan coordinator, workers, and progress publisher have an explicit owner, cancellation path, and join path. Fire-and-forget goroutines are prohibited.
+
+The binary accepts no positional arguments or configuration overrides in v1. `--version` prints the semantic version, commit, and Go toolchain version embedded at build time, then exits successfully without opening runtime state. Only `main` chooses a process exit code, after deferred cleanup has run; library and internal packages must not call `os.Exit`, `log.Fatal`, or terminate the process for an expected error. Diagnostics and structured logs go to standard error.
+
+Shutdown proceeds as follows:
+
+1. Mark the process as stopping and stop accepting new import work.
+2. Begin `http.Server.Shutdown` with a fresh bounded shutdown context so canceling the application context does not prevent HTTP draining.
+3. Cancel the scan context. Workers finish only the current indivisible filesystem or SQLite operation, persist a recoverable state, and exit.
+4. Wait for the coordinator, workers, progress publisher, and HTTP server. A shutdown deadline expiry is logged and produces a non-zero exit.
+5. Best-effort checkpoint the WAL, then close SQLite and other owned resources in reverse construction order.
+
+No adapter closes a resource it does not own. Constructor failure closes every resource already created, combining independent cleanup errors where useful.
 
 ## 8. Import workflow
 
@@ -289,6 +353,10 @@ Fatal configuration, directory, migration, or database errors prevent startup an
 7. Start exactly one background scan of the configured incoming directory.
 
 The scan uses a snapshot of regular directory entries sorted by normalized name for predictable operation. Files added after the snapshot are not imported until restart.
+
+The scan coordinator owns a bounded queue whose capacity is derived from, and no greater than twice, the configured worker count. It starts exactly `workers` worker goroutines for the scan, sends immutable work values, closes the queue as its sole sender, and waits for all workers before finalizing scan status. Workers never spawn per-item goroutines. Backpressure is intentional: discovery pauses when the queue is full.
+
+The coordinator is the sole owner of source aggregation and deletion decisions. Workers return item results; they do not mutate shared source state or delete source files. A source cannot have two active item-state transitions for the same item, and unique database constraints remain the final defense against duplicate work.
 
 ### 8.2 Discovery and source classification
 
@@ -338,18 +406,18 @@ sequenceDiagram
 Detailed steps for a new image are:
 
 1. Create or resume its import item.
-2. Stream bytes into `processed/.staging/` while computing SHA-256 and enforcing byte limits.
+2. Open a new staging file exclusively with restrictive permissions, stream bytes into it while computing SHA-256 and enforcing byte limits, sync it, check close errors, and record its size and digest.
 3. Check for an existing ready asset with the same digest.
 4. Validate the actual image format and dimensions by decoding only within configured limits.
-5. Extract technical metadata and create a PNG thumbnail.
-6. Send the image or representative frame to OpenAI and validate structured semantic output.
+5. Extract technical metadata and create both the PNG thumbnail and bounded transient analysis rendition in one inspection use case.
+6. Send the analysis rendition to OpenAI and validate structured semantic output.
 7. Normalize semantic values and construct the managed relative path.
 8. Commit a staged asset, thumbnail, tags, AI run, and import linkage in a SQLite transaction.
-9. Atomically rename the staged file to its final path on the same filesystem.
+9. Atomically rename the staged file to its final path on the same filesystem without overwriting an unrelated file, then sync the destination directory where the operating system supports it.
 10. Mark the asset and item ready in SQLite.
 11. Re-evaluate whether the containing source is eligible for deletion.
 
-The original managed bytes must be byte-for-byte identical to the import item. No format conversion, metadata stripping, orientation rewrite, or animation rewrite is permitted.
+The original managed bytes must be byte-for-byte identical to the import item. No format conversion, metadata stripping, orientation rewrite, or animation rewrite is permitted. `ready` is not written until file sync/close, database commit, promotion, and supported directory-sync steps have succeeded. On platforms that cannot provide a directory-sync primitive, recovery still verifies the full digest before promoting a staged row to `ready`.
 
 ### 8.4 Technical image inspection
 
@@ -373,13 +441,22 @@ The thumbnail must:
 - Preserve aspect ratio, display orientation, and transparency.
 - Be stored as a SQLite BLOB with its MIME type, width, height, and byte length.
 
+The AI-analysis rendition must:
+
+- Use the first display frame, apply display orientation, preserve aspect ratio, and never upscale.
+- Fit within `analysis_max_dimension` and `max_analysis_bytes` before any network request.
+- Preserve transparency when it is semantically meaningful; otherwise choose a deterministic supported encoding that stays within the byte limit.
+- Exist only in bounded memory or staging scratch space for the request and never replace or become the managed original.
+
+Image dimensions are checked with overflow-safe arithmetic before allocation. Inspection begins with metadata/config decoding, applies the pixel limit before full raster decoding, samples rather than retaining an entire oversized palette working set, and checks cancellation between bounded decode or sampling phases. A panic from an untrusted decoder is recovered only at the individual item boundary, converted to a stable internal-failure code, and logged with diagnostics; it must not terminate the process or expose a stack trace to the browser.
+
 ### 8.5 ZIP processing and deletion rules
 
 ZIP entries are streamed individually; the archive must not be extracted wholesale into the application root.
 
 - Normalize entry names and reject absolute paths, drive-qualified paths, `..` traversal, NUL bytes, symlinks, and special files.
 - Reject nested archives even if their extension is renamed or absent.
-- Enforce entry count, per-entry size, total uncompressed size, and compression-ratio limits before and while reading.
+- Enforce entry count, per-entry size, total uncompressed size, and compression-ratio limits from both declared metadata and actual streamed bytes. A limited reader remains authoritative when metadata lies.
 - Directories and known platform metadata such as `__MACOSX/`, `.DS_Store`, and `Thumbs.db` may be ignored.
 - Any other non-image regular entry is recorded as unhandled and prevents source deletion.
 - Each valid image entry is an independent import item, so successful members are not repeated after a partial failure.
@@ -398,7 +475,7 @@ Otherwise the archive remains in `incoming/` with an actionable retained reason.
 
 A loose source may be deleted only after its import item is ready or linked as a duplicate to an existing ready asset. A failed or blocked item is retained. Failure to delete an otherwise successful source is recorded and retried only during startup recovery; it does not invalidate the managed asset.
 
-Source deletion is intentional and irreversible. It must use the exact canonical path captured during discovery, revalidate that the file still represents the discovered source, and never operate on a computed directory, wildcard, or user-supplied HTTP path.
+Source deletion is intentional and irreversible. It must use the exact validated path captured during discovery and a root-scoped relative operation, revalidate the complete source SHA-256 immediately before deletion, and never operate on a computed directory, wildcard, or user-supplied HTTP path. For a ZIP source, the fingerprint covers the archive bytes, not merely its entry list, size, or modification time. If the source changed, deletion is refused and the retained reason identifies the change.
 
 ### 8.7 File naming
 
@@ -446,11 +523,11 @@ Recovery runs before the new scan:
 - A staged database asset with its final file present is verified and marked ready.
 - A staged database asset with its staging file present resumes the atomic rename.
 - A staged database asset with neither file is marked failed; the source remains.
-- An orphan staging file without a database/import reference is removed only after its canonical path and age are validated.
+- An orphan staging file without a database/import reference is removed only after its root-scoped relative path, regular-file type, naming pattern, and minimum age are validated.
 - A source marked ready-to-delete but still present is revalidated and deletion is retried.
 - A ready asset with a missing or digest-mismatched managed file is hidden from normal results and reported as integrity-failed; no source is deleted because of that row.
 
-SQLite cannot participate in a filesystem transaction, so the persisted staged state and recovery rules are part of the correctness design rather than optional cleanup.
+SQLite cannot participate in a filesystem transaction, so the persisted staged state, full-digest verification, file and directory sync points, and recovery rules are part of the correctness design rather than optional cleanup.
 
 ## 9. Categorization and tagging
 
@@ -534,7 +611,7 @@ Every analysis attempt records:
 - Attempt number, start time, completion time, and latency.
 - Request identifier when returned by the provider.
 - Token or usage information when returned.
-- Raw response or bounded error details.
+- Bounded, sanitized error details; raw provider response bodies, image payloads, authorization headers, and unrestricted model output are not persisted.
 - Normalized result accepted by the application.
 
 The current asset metadata is separate from the immutable AI-run record. User edits update current metadata and `updated_at` but do not alter the AI response or move the managed file. AI confidence is displayed as provenance and is not user-editable.
@@ -544,17 +621,19 @@ The current asset metadata is separate from the immutable AI-run record. User ed
 ### 10.1 Request contract
 
 - Use the OpenAI Responses API.
-- Supply the image or representative frame as image input.
+- Supply only the bounded analysis rendition from Section 8.4 as image input.
 - Request schema-constrained JSON output for the structure in Section 9.2.
-- Use the configured model, reasoning effort, image detail, timeout, and retry policy.
+- Use the configured model, reasoning effort, image detail, total operation timeout, and retry policy.
 - Include only the image and instructions needed for classification. Do not send the local path, API key, database identifiers, or unrelated catalog data.
 - Validate HTTP status, response type, refusal state, output schema, field lengths, enum values, confidence range, and tag counts before accepting a result.
 
 ### 10.2 Retry policy
 
-Retry only transient failures such as timeouts, connection interruption, rate limiting, and eligible server errors. Honor provider retry guidance when present; otherwise use exponential backoff with jitter from `initial_retry_delay_ms` and stop at `max_attempts`.
+`timeout_seconds` is one deadline for the complete analysis operation, including all attempts, response reads, validation, and backoff. The HTTP client also has bounded transport, header, and idle-connection settings; response bodies are always closed and their size is capped before decoding.
 
-Do not retry invalid credentials, unsupported model/configuration, policy refusal, malformed local input, or repeated schema-invalid output beyond the configured attempt limit. Exhausted attempts mark the item failed and leave the source untouched.
+Retry only transient failures such as connection interruption, rate limiting, and eligible server errors. Honor a valid bounded `Retry-After` value when present; otherwise use exponential backoff with full jitter from `initial_retry_delay_ms`. Stop at `max_attempts`, when the total deadline cannot accommodate another attempt, or immediately when the caller is canceled. Backoff waits use a reusable timer or context-aware wait rather than `time.Sleep`.
+
+Do not retry caller cancellation, invalid credentials, unsupported model/configuration, policy refusal, malformed local input, or a schema-invalid successful response unless the implementation has an explicitly bounded corrective retry. Exhausted attempts mark the item failed and leave the source untouched. Attempt and terminal errors preserve their typed cause for `errors.Is`/`errors.As` while mapping to a stable user-safe code.
 
 ### 10.3 Availability behavior
 
@@ -572,35 +651,37 @@ SQLite is authoritative for catalog and workflow state. Managed original bytes a
 
 ### 11.1 SQLite configuration
 
-On every connection:
+SQLite configuration distinguishes database-wide settings from per-connection settings:
 
-- Enable foreign keys.
-- Use WAL journal mode.
-- Configure a bounded busy timeout.
-- Use synchronous mode appropriate for durable local operation.
-- Serialize schema migrations and write transactions.
-- Verify that FTS5 is available before serving requests.
+- Before serving requests, enable and verify WAL journal mode, use `synchronous=FULL`, and verify FTS5 availability.
+- Enable foreign keys and a bounded busy timeout on every physical connection through driver connection configuration, not by executing a pragma once on an arbitrary pooled connection.
+- Configure explicit, bounded `database/sql` open and idle connection counts. The values must account for HTTP reads and import workers without allowing an unbounded pool.
+- Serialize application write transactions behind one repository-owned writer gate while allowing WAL-backed reads to continue. Do not hold unrelated application mutexes across database or filesystem I/O.
+- Use context-aware query and execution methods, close rows immediately with `defer`, and check both scan errors and `rows.Err()`.
+- Use parameterized values and allowlisted sort expressions. FTS query syntax is parsed and escaped by a dedicated function; raw user fragments are never interpolated as SQL or FTS operators.
 
-Database migrations are embedded, ordered, transactional where SQLite permits, and tracked in `schema_migrations`. Downgrade migrations are not required for v1; users must back up before upgrading.
+SQLite does not support `SELECT ... FOR UPDATE`. State transitions that require reservation use a short write transaction with an immediate write lock or a conditional update whose affected-row count is checked. Unique constraints and compare-and-swap state predicates provide the final concurrency guard. Busy errors are not retried indefinitely and never cause an entire filesystem operation to be repeated blindly.
+
+Database migrations are embedded, ordered, checksum-verified, transactional where SQLite permits, and tracked in `schema_migrations`. Migration execution is exclusive and completes before the HTTP server starts. Downgrade migrations are not required for v1; users must back up before upgrading.
 
 ### 11.2 Logical schema
 
 | Entity | Important fields and constraints |
 | --- | --- |
-| `assets` | UUID primary key; unique full SHA-256; original filename; managed relative path; validated format/MIME; technical fields; current semantic fields; state; timestamps. Only `ready` assets appear in normal catalog results. |
+| `assets` | Application-generated 128-bit random text ID; unique full SHA-256; original filename; managed relative path; validated format/MIME; technical fields; current semantic fields; optimistic version; state; timestamps. Only `ready` assets appear in normal catalog results. |
 | `thumbnails` | One-to-one asset ID; `image/png`; width; height; byte length; BLOB; foreign key with cascade. |
 | `tags` | UUID or integer key; unique `(facet, slug)`; display label. |
 | `asset_tags` | Unique asset/tag pair; origin (`ai`, `deterministic`, or `user`); timestamps. |
 | `import_sources` | Canonical source path relative to `incoming/`; type; discovery fingerprint; aggregate state; deletion state; retained/error reason; timestamps. |
 | `import_items` | Source ID; ZIP entry name when applicable; staged path; SHA-256; linked asset ID; state; attempt count; error code and bounded message. |
-| `ai_runs` | Import item and optional asset ID; provider/model parameters; prompt/schema versions; response/request identifiers; usage; latency; outcome; bounded raw response/error. |
+| `ai_runs` | Import item and optional asset ID; provider/model parameters; prompt/schema versions; response/request identifiers; usage; latency; outcome; bounded sanitized error. |
 | `schema_migrations` | Migration version, checksum, and applied time. |
 
 The database must constrain full digests, managed paths, normalized tags, state values, and primary type values. Foreign-key relationships must prevent orphaned thumbnails, import items, tags, or AI runs.
 
 ### 11.3 Full-text search
 
-Use an FTS5 external-content index covering current title, description, original filename, style, and a flattened tag string. Repository methods own synchronization through migrations and transactional triggers or explicit transactional updates.
+Use an FTS5 external-content index covering current title, description, original filename, style, and a flattened tag string. Repository methods synchronize the index explicitly in the same transaction as catalog mutations. Hidden trigger side effects are not used.
 
 Search behavior:
 
@@ -615,11 +696,13 @@ Search behavior:
 
 The UI should state that backups require both the database and processed directory. The supported manual procedure is to stop the application, copy `assets.db` plus `processed/`, and then restart it. Online backup and restore tools are outside v1.
 
-On startup, run lightweight database checks and filesystem reconciliation. A deeper integrity check may be exposed only through logs in v1.
+On startup, run lightweight database checks and filesystem reconciliation. A deeper integrity check may be exposed only through logs in v1. On clean shutdown, attempt a bounded WAL checkpoint before closing the database; backup instructions must not imply that copying only the main database file while the process runs is safe.
 
 ## 12. HTTP and UI design
 
-The server renders HTML using Go templates. HTMX provides fragment updates for filters, pagination, forms, and processing status. The HTMX script and all CSS are vendored and embedded; no browser request may load application resources from a CDN.
+The server uses `net/http` and renders HTML with Go templates. HTMX provides fragment updates for filters, pagination, forms, and processing status. The HTMX script and all CSS are vendored and embedded; no browser request may load application resources from a CDN. Handlers depend on use-case interfaces, not directly on SQLite or filesystem adapters.
+
+The `http.Server` sets explicit `ReadHeaderTimeout`, `IdleTimeout`, `MaxHeaderBytes`, and a bounded general write policy. Each handler applies its own body limit and operation deadline before parsing input. Long asset downloads stream through a separately bounded handler path so a short global write timeout does not truncate valid downloads. Routing uses method-aware patterns and treats escaped or malformed paths as invalid rather than normalizing attacker-controlled input into a different route.
 
 ### 12.1 Routes
 
@@ -705,17 +788,18 @@ Although the application is local, browser and file inputs remain untrusted.
 - Validate the `Host` header against the configured loopback host and port to reduce DNS-rebinding risk.
 - Do not enable CORS.
 - Use synchronizer-token or signed double-submit CSRF protection on all POST routes.
+- Generate CSRF secrets and opaque application IDs with `crypto/rand`; compare secret tokens in constant time. Tokens are never accepted in URLs.
 - Set cookies `HttpOnly`, `SameSite=Strict`, and `Secure` when local HTTPS is ever introduced.
 - Set a restrictive Content Security Policy allowing embedded same-origin application resources only.
 - Set `X-Content-Type-Options: nosniff`, a restrictive referrer policy, and frame-ancestor protection.
-- Apply body-size, header-size, read, write, idle, and handler timeouts.
+- Apply body-size, header-size, read-header, write, idle, handler, and graceful-shutdown timeouts. Do not use the zero-value `http.Server` timeout configuration.
 - Escape all rendered values and avoid unsafe template HTML types for user or AI content.
 
 Authentication is intentionally absent because the process is loopback-only and single-user. Binding to a non-loopback address is unsupported rather than an undocumented way to deploy the application.
 
 ### 13.2 Filesystem protections
 
-- Canonicalize paths and verify containment after resolving symlinks where relevant.
+- Canonicalize roots during startup, then use `os.Root` and validated relative paths for routine incoming, staging, processed-file, deletion, and download operations. `filepath.Clean` plus string-prefix checks are insufficient.
 - Never derive a deletion, download, or reveal path directly from an HTTP parameter.
 - Reject symlinks and special files during discovery and ZIP processing.
 - Use restrictive permissions for the database and staging directory where the OS supports them.
@@ -742,7 +826,11 @@ Authentication is intentionally absent because the process is loopback-only and 
 
 ### 14.1 Logging
 
-Emit structured logs to standard error with timestamp, level, component, operation, import/source/item identifiers, duration, outcome, and stable error code. Paths and filenames should be included only when useful and safely bounded. Never log image bytes, raw API keys, authorization headers, CSRF tokens, or unrestricted AI responses.
+Use the standard library's `log/slog` with a JSON handler to emit structured logs to standard error. Stable event messages and keys include timestamp, level, component, operation, import/source/item identifiers, duration, outcome, and stable error code. High-cardinality values such as IDs and bounded paths are attributes, never part of the event-message template. Paths and filenames are included only when useful, normalized for control characters, and safely bounded. Never log image bytes, raw API keys, authorization headers, CSRF tokens, provider request bodies, or unrestricted AI responses.
+
+Code returns wrapped errors until an owning boundary can decide the outcome. HTTP middleware logs unhandled request failures once; the import coordinator logs terminal item/source outcomes once; startup logs fatal failures once. Lower layers do not both log and return the same error. Context cancellation during expected shutdown is not logged as an application failure.
+
+The application exports no remote telemetry, analytics, metrics listener, tracing exporter, or pprof endpoint in v1. User-visible progress is a bounded snapshot maintained by the coordinator and persisted workflow state; reading progress must not race with worker updates. Diagnostic profiling is performed only in development or tests through explicit tooling.
 
 ### 14.2 Error classes
 
@@ -756,11 +844,15 @@ Emit structured logs to standard error with timestamp, level, component, operati
 | Filesystem | Permission, disk full, atomic rename failure | Record recoverable state, retain source, reconcile on restart. |
 | Integrity | Missing or digest-mismatched managed file | Hide affected asset from normal results and report prominently. |
 
+Stable error codes are separate from Go error text. Error text is lowercase, contextual, and intended for logs; browser messages are bounded translations that do not expose wrapped database, filesystem, network, or stack details. Expected conditions use sentinel or typed errors and are inspected with `errors.Is`/`errors.As`; direct string matching and unchecked type assertions are prohibited.
+
 User-visible errors must say what remains safe, especially whether the source was retained. Low-level stack details are not rendered in the browser.
 
 ## 15. Testing strategy
 
 Tests use temporary application roots and never depend on the developer's real `incoming/`, `processed/`, configuration, browser, file manager, or OpenAI account.
+
+Tests are executable behavior contracts. Unit cases are table-driven with named subtests, independent of execution order, and parallel only when they do not share process-global state. Mocks implement consumer-owned interfaces rather than concrete adapters. Tests must not use real sleeps for retry, deadline, or shutdown behavior when Go 1.26 `testing/synctest` or an injected clock can make the behavior deterministic.
 
 ### 15.1 Unit tests
 
@@ -773,8 +865,11 @@ Tests use temporary application roots and never depend on the developer's real `
 - Slug normalization, canonical extensions, hash suffixes, path length, reserved names, and collision behavior (`FR-010`).
 - Tag normalization, facet validation, deduplication, controlled primary types, and output-schema validation (`FR-009`, `FR-014`).
 - Retry classification, attempt count, exponential backoff, jitter bounds, and cancellation (`FR-009`).
+- Root-context propagation, queue backpressure, worker cancellation, channel ownership, and graceful shutdown ordering (`NFR-010`).
 - ZIP traversal, absolute paths, symlinks, nested archives, file-count limits, compression bombs, truncated entries, and benign metadata (`NFR-006`, `NFR-008`).
 - OS reveal command construction using argument arrays without launching a real process (`FR-015`).
+
+Fuzz targets cover JSON configuration tokenization, slug and tag normalization, route/query parsing, ZIP entry validation, FTS query construction, image metadata parsers, and structured AI output. Each fuzz target starts with valid and hostile regression seeds, enforces a short input bound, and asserts no panic, traversal, uncontrolled allocation, or invariant violation.
 
 ### 15.2 Integration tests
 
@@ -791,6 +886,9 @@ Tests use temporary application roots and never depend on the developer's real `
 - Serve thumbnails and streamed downloads with containment, safe headers, and missing-file behavior (`FR-015`).
 - Exercise metadata and reveal POSTs with valid, missing, invalid, and cross-origin CSRF tokens.
 - Reject hostile Host headers, non-loopback binding configuration, path injection, HTML injection, and oversized requests (`NFR-006`).
+- Cancel an active scan and HTTP request, then verify all owned goroutines exit and the next startup resumes only from documented states (`NFR-010`, `FR-017`).
+
+Integration tests use the `integration` build tag and run separately with cache disabled. Packages that own goroutines use leak detection in `TestMain`. SQLite tests exercise the selected pure-Go driver itself, including per-connection pragmas, bounded pool behavior, busy handling, WAL reads during a write, conditional state transitions, and context cancellation.
 
 ### 15.3 End-to-end tests
 
@@ -805,10 +903,27 @@ Tests use temporary application roots and never depend on the developer's real `
 9. Verify eligible sources were deleted and failed/unsafe sources were retained.
 10. Restart the same binary and confirm recovery and no duplicate catalog records.
 11. Add a new source after the scan snapshot and confirm it is not discovered until the next restart.
+12. Send an interrupt during staging, analysis, and commit in separate runs; verify bounded exit and correct restart recovery.
 
 ### 15.4 Cross-platform checks
 
-CI must build with `CGO_ENABLED=0` for supported Windows, macOS, and Linux architectures. Platform-specific tests verify path handling, reserved filenames, separators, case behavior, atomic rename assumptions, executable-root resolution, download filenames, and reveal argument construction.
+CI must build with `CGO_ENABLED=0` for Windows, macOS, and Linux on amd64 and arm64 unless a target is explicitly removed by an architecture decision. Platform-specific tests verify `os.Root` behavior, path handling, reserved filenames, separators, case behavior, atomic rename assumptions, file/directory sync behavior, executable-root resolution, download filenames, and reveal argument construction.
+
+### 15.5 Quality gates and performance evidence
+
+Every pull request runs, at minimum:
+
+- `go test -shuffle=on ./...` and a separate `go test -race -shuffle=on ./...` job on a native runner.
+- Integration tests with `-tags=integration -count=1`.
+- `go vet`, `golangci-lint`, `go mod tidy` with a clean-diff check, and `go mod verify`.
+- `govulncheck ./...` and security static analysis, with reviewed, narrowly justified suppressions only.
+- `CGO_ENABLED=0` cross-builds for the supported target matrix.
+
+The module pins development tools with Go `tool` directives where practical. GitHub Actions use least-privilege permissions and pinned stable major versions. Dependency-update automation groups routine patch/minor updates, leaves major updates for individual review, and runs the full quality gate. A release runs the same checks, records the Go version, produces checksums for every archive, and must not publish if reachable vulnerabilities remain unreviewed.
+
+The repository owns a versioned `.golangci.yml` as the linter source of truth. At minimum, its enabled checks cover unchecked errors, body and SQL-row closure, lost context cancellation, nil/error mistakes, unsafe type assertions, shadowing, security-sensitive file modes, static analysis, and test-helper correctness. Every `//nolint` names the specific linter and includes a nearby justification; blanket or unexplained suppressions fail CI.
+
+Performance work follows measure-before-optimize discipline. Benchmarks cover representative catalog search/filter combinations, FTS updates, staging/hash throughput, thumbnail and palette generation, ZIP enumeration, and bounded analysis-rendition encoding. New Go 1.26 benchmarks use `b.Loop`, report allocations, run multiple samples, and use `benchstat` before a performance claim is accepted. Cloud-runner noise is not a hard regression gate without a stable baseline; correctness limits and bounded memory remain mandatory regardless of benchmark results. PGO, pooling, caching, and unsafe code are deferred until profiles and statistically significant benchmarks justify them.
 
 ## 16. Acceptance criteria
 
@@ -817,6 +932,7 @@ The v1 implementation is acceptable when:
 - One cross-platform Go binary contains the application server and all UI/migration resources.
 - The binary has no runtime Node.js, CDN, browser-extension, or CGO requirement.
 - It listens only on the configured loopback address.
+- All long-lived goroutines are owned, cancelable, joinable, and verified leak-free during graceful shutdown tests.
 - Existing assets remain browsable and editable without working OpenAI credentials or connectivity.
 - A startup scan imports supported loose and archived images using the documented workflow.
 - Original managed bytes match their import bytes exactly.
@@ -825,9 +941,10 @@ The v1 implementation is acceptable when:
 - Rich tags identify pixel art and distinguish character, terrain, and the other controlled asset types.
 - Repeated imports and restarts do not create duplicate managed assets.
 - No source is deleted before durable success, and partial/unsafe archives are retained.
+- Incoming and processed-file operations are root-scoped, source bytes are rehashed before deletion, and crash recovery verifies full managed-file digests.
 - Metadata corrections do not rename or move managed originals.
 - Download and cross-platform reveal actions operate only on database-resolved managed paths.
-- Unit, integration, end-to-end, malformed-input, recovery, and cross-platform build tests pass.
+- Unit, fuzz, integration, race, goroutine-leak, end-to-end, malformed-input, recovery, static-analysis, vulnerability, and cross-platform build checks pass.
 
 ## 17. Risks and mitigations
 
@@ -841,6 +958,9 @@ The v1 implementation is acceptable when:
 | A local web page is attacked through DNS rebinding or CSRF | Bind loopback, validate Host and origin, disable CORS, and require CSRF protection. |
 | Database backup omits managed files | Treat database plus `processed/` as one backup set and document offline backup. |
 | Category edits make the import-time directory misleading | Treat SQLite as the current taxonomy and explicitly keep managed paths stable after import. |
+| A pure-Go dependency lacks required SQLite, FTS5, image, animation, or cross-platform behavior | Before feature implementation, prove the candidate with a CGO-disabled spike and fixtures on all target OS/architecture families; record the selected version, license, and limitations. |
+| Worker or decoder behavior exceeds memory limits | Use bounded queues, one decode per item use case, metadata-first validation, overflow-safe allocation checks, representative-frame processing, fuzzing, and allocation benchmarks. |
+| Shutdown interrupts a cross-resource commit | Cancel only at documented safe points, persist staged state before promotion, join workers before closing SQLite, and exercise interruption points in end-to-end tests. |
 
 ## 18. Deferred decisions
 
