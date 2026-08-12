@@ -102,6 +102,9 @@ func (analyzer *Analyzer) preflightAccountAndLimits(ctx context.Context) error {
 			ErrorAuthentication, "A ChatGPT-backed Codex account is required", false, nil,
 		)
 	}
+	if analyzer.status.State == "" {
+		analyzer.status = Status{State: StateReady, PlanType: accountResponse.Account.PlanType}
+	}
 
 	var limits rateLimitsResult
 	if err := analyzer.client.request(ctx, "account/rateLimits/read", map[string]any{}, &limits); err != nil {

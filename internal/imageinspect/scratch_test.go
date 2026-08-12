@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
 
 func TestScratchStoreCreatesOnePrivateRenditionAndRemovesIt(t *testing.T) {
@@ -25,10 +23,7 @@ func TestScratchStoreCreatesOnePrivateRenditionAndRemovesIt(t *testing.T) {
 			t.Errorf("Close() error = %v", err)
 		}
 	})
-	itemID, err := importer.ParseID("0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
+	itemID := "0123456789abcdef0123456789abcdef"
 	want := []byte("bounded image payload")
 	scratch, err := store.Create(context.Background(), itemID, Rendition{
 		MIMEType: "image/png", Extension: ".png", Data: want,
@@ -89,10 +84,7 @@ func TestScratchStoreRejectsForgedAndCanceledOperations(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	itemID, err := importer.ParseID("abcdef0123456789abcdef0123456789")
-	if err != nil {
-		t.Fatal(err)
-	}
+	itemID := "abcdef0123456789abcdef0123456789"
 	if _, err := store.Create(ctx, itemID, Rendition{
 		MIMEType: "image/png", Extension: ".png", Data: []byte("payload"),
 	}); !errors.Is(err, context.Canceled) {

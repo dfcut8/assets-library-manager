@@ -405,6 +405,19 @@ type AssetRef struct {
 	ManagedPath ManagedPath
 }
 
+// StagedFile is a fully synced original awaiting promotion.
+type StagedFile struct {
+	Path   StagedPath
+	Digest Digest
+	Size   int64
+}
+
+// ScratchImage identifies the sole transient analysis file in an item-specific directory.
+type ScratchImage struct {
+	Path      string
+	Directory string
+}
+
 // Thumbnail is the validated PNG preview persisted with an asset.
 type Thumbnail struct {
 	Width  int
@@ -439,6 +452,33 @@ type AIRun struct {
 	ErrorCode            ErrorCode
 	ErrorMessage         string
 	NormalizedResultJSON string
+}
+
+// ImageInput identifies one bounded rendition and the durable item it belongs to.
+type ImageInput struct {
+	ItemID           ID
+	AssetID          ID
+	Path             string
+	ScratchDirectory string
+	DisplayWidth     int
+	DisplayHeight    int
+}
+
+// AnalysisResult is normalized semantic catalog metadata.
+type AnalysisResult struct {
+	Title       string
+	Description string
+	PrimaryType catalog.PrimaryType
+	Layout      catalog.Layout
+	Style       string
+	PixelArt    bool
+	Confidence  float64
+	Tags        []Tag
+}
+
+// AnalysisProvenance is the accepted immutable AI attempt committed with the asset.
+type AnalysisProvenance struct {
+	Run AIRun
 }
 
 // StagedAsset contains all data committed before filesystem promotion.
@@ -489,6 +529,7 @@ type PendingDeletion struct {
 	ID          ID
 	Path        SourcePath
 	Fingerprint Digest
+	SourceState SourceState
 	State       DeletionState
 }
 

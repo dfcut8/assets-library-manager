@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"time"
@@ -26,11 +27,7 @@ type Store struct {
 }
 
 // StagedFile is a fully written and synced original awaiting promotion.
-type StagedFile struct {
-	Path   importer.StagedPath
-	Digest importer.Digest
-	Size   int64
-}
+type StagedFile = importer.StagedFile
 
 // SnapshotIncoming returns top-level entry metadata without following symbolic links.
 func (s *Store) SnapshotIncoming(ctx context.Context) ([]importer.IncomingEntry, error) {
@@ -189,6 +186,26 @@ func (s *Store) OpenStaged(stagedPath importer.StagedPath) (*os.File, error) {
 	return s.openRegular(s.staging, stagedPath.String(), "staging file")
 }
 
+// VerifyStaged checks a regular staging file against its full expected digest and size.
+func (s *Store) VerifyStaged(
+	ctx context.Context,
+	stagedPath importer.StagedPath,
+	expected importer.Digest,
+	expectedSize int64,
+) (bool, error) {
+	file, err := s.OpenStaged(stagedPath)
+	if err != nil {
+		return false, err
+	}
+	digest, size, hashErr := hashReader(ctx, file, expectedSize)
+	closeErr := closeFile("staging file", file)
+	if hashErr != nil || closeErr != nil {
+		return false, errors.Join(hashErr, closeErr)
+	}
+
+	return size == expectedSize && digest == expected, nil
+}
+
 // RemoveStaged removes an item staging file idempotently.
 func (s *Store) RemoveStaged(stagedPath importer.StagedPath) error {
 	if err := s.staging.Remove(stagedPath.String()); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -196,6 +213,63 @@ func (s *Store) RemoveStaged(stagedPath importer.StagedPath) error {
 	}
 
 	return nil
+}
+
+// CreateAnalysisScratch writes the only file in an exclusive item-specific scratch directory.
+func (s *Store) CreateAnalysisScratch(
+	itemID importer.ID,
+	extension string,
+	data []byte,
+) (scratch importer.ScratchImage, returnErr error) {
+	if itemID.IsZero() || len(data) == 0 || (extension != ".png" && extension != ".jpg") {
+		return importer.ScratchImage{}, errors.New("creating analysis scratch: arguments are invalid")
+	}
+	directoryName := itemID.String() + ".scratch"
+	if err := s.staging.Mkdir(directoryName, 0o700); err != nil {
+		return importer.ScratchImage{}, fmt.Errorf("creating analysis scratch directory: %w", err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			returnErr = errors.Join(returnErr, removeScratchDirectory(s.staging, directoryName))
+		}
+	}()
+	fileName := "analysis" + extension
+	relativePath := path.Join(directoryName, fileName)
+	file, err := s.staging.OpenFile(relativePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return importer.ScratchImage{}, fmt.Errorf("creating analysis scratch file: %w", err)
+	}
+	if err := writeFull(file, data); err != nil {
+		return importer.ScratchImage{}, errors.Join(
+			fmt.Errorf("writing analysis scratch file: %w", err),
+			closeFile("analysis scratch file", file),
+		)
+	}
+	if err := file.Sync(); err != nil {
+		return importer.ScratchImage{}, errors.Join(
+			fmt.Errorf("syncing analysis scratch file: %w", err),
+			closeFile("analysis scratch file", file),
+		)
+	}
+	if err := file.Close(); err != nil {
+		return importer.ScratchImage{}, fmt.Errorf("closing analysis scratch file: %w", err)
+	}
+	keep = true
+	directoryPath := filepath.Join(s.staging.Name(), filepath.FromSlash(directoryName))
+
+	return importer.ScratchImage{
+		Path: filepath.Join(directoryPath, fileName), Directory: directoryPath,
+	}, nil
+}
+
+// RemoveAnalysisScratch removes one item-specific scratch directory idempotently.
+func (s *Store) RemoveAnalysisScratch(itemID importer.ID) error {
+	if itemID.IsZero() {
+		return errors.New("removing analysis scratch: item identifier is zero")
+	}
+
+	return removeScratchDirectory(s.staging, itemID.String()+".scratch")
 }
 
 // Promote publishes a staged original without overwriting an unrelated destination.
@@ -481,4 +555,12 @@ func wrapError(operation string, err error) error {
 	}
 
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func removeScratchDirectory(root *os.Root, name string) error {
+	if err := root.RemoveAll(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing analysis scratch directory: %w", err)
+	}
+
+	return nil
 }

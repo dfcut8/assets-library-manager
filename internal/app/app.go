@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/config"
+	"github.com/dfcut8/assets-library-manager/internal/imageinspect"
+	"github.com/dfcut8/assets-library-manager/internal/importer"
 	"github.com/dfcut8/assets-library-manager/internal/sqlite"
 	"github.com/dfcut8/assets-library-manager/internal/storage"
 	"github.com/dfcut8/assets-library-manager/internal/web"
@@ -24,25 +27,21 @@ type URLLauncher interface {
 	Open(ctx context.Context, targetURL string) error
 }
 
-// CodexChecker verifies that subscription-backed processing is available.
-type CodexChecker interface {
-	Check(ctx context.Context, command string) (codex.Status, error)
+// AnalyzerStarter creates one owned production semantic analyzer.
+type AnalyzerStarter interface {
+	Start(context.Context, codex.AnalyzerConfig, codex.AttemptRecorder) (codex.Runtime, error)
 }
 
-// Application owns the process lifecycle and its injected platform boundary.
+// Application owns the process lifecycle and its injected platform boundaries.
 type Application struct {
 	logger   *slog.Logger
 	launcher URLLauncher
-	codex    CodexChecker
+	codex    AnalyzerStarter
 }
 
 // New constructs an application with explicit process-level dependencies.
-func New(logger *slog.Logger, launcher URLLauncher, codexChecker CodexChecker) *Application {
-	return &Application{
-		logger:   logger,
-		launcher: launcher,
-		codex:    codexChecker,
-	}
+func New(logger *slog.Logger, launcher URLLauncher, starter AnalyzerStarter) *Application {
+	return &Application{logger: logger, launcher: launcher, codex: starter}
 }
 
 // ExecutableRoot returns the canonical directory containing the running executable.
@@ -59,13 +58,12 @@ func ExecutableRoot() (string, error) {
 	return filepath.Dir(executable), nil
 }
 
-// Run initializes runtime state and serves until cancellation or a server failure.
-func (a *Application) Run(ctx context.Context, root string) error {
+// Run recovers runtime state, starts HTTP, launches one startup scan, and shuts down in order.
+func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 	cfg, err := config.Load(root)
 	if err != nil {
 		return err
 	}
-
 	paths, err := storage.Prepare(root, cfg.Storage)
 	if err != nil {
 		return err
@@ -74,59 +72,45 @@ func (a *Application) Run(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
+	store, err := storage.OpenStore(paths)
+	if err != nil {
+		return errors.Join(err, database.Close())
+	}
+	resourcesOpen := true
+	defer func() {
+		if resourcesOpen {
+			returnErr = errors.Join(returnErr, store.Close(), database.Close())
+		}
+	}()
 
-	codexCtx, cancelCodex := context.WithTimeout(
-		ctx,
-		time.Duration(cfg.Codex.StartupTimeoutSeconds)*time.Second,
+	coordinatorConfig := processingConfig(cfg)
+	recovery, err := importer.NewCoordinator(
+		coordinatorConfig, database, store, imageinspect.New(), nil, a.logger,
 	)
-	codexStatus, codexErr := a.codex.Check(codexCtx, cfg.Codex.Command)
-	cancelCodex()
-	if codexErr != nil {
-		a.logger.Warn("codex preflight failed", "error", codexErr)
+	if err != nil {
+		return err
+	}
+	if err := recovery.Recover(ctx); err != nil {
+		return fmt.Errorf("recovering imports: %w", err)
 	}
 
-	runErr := a.serve(ctx, cfg, codexStatus)
-	cleanupCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(ctx),
-		time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second,
-	)
-	defer cancel()
-	checkpointErr := database.Checkpoint(cleanupCtx)
-	closeErr := database.Close()
-
-	return errors.Join(runErr, checkpointErr, closeErr)
-}
-
-func (a *Application) serve(ctx context.Context, cfg config.Config, codexStatus codex.Status) error {
 	address := net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port))
 	handler, err := web.New(address, web.Status{
-		CodexState: codexStatus.State,
-		CodexPlan:  codexStatus.PlanType,
-		Database:   cfg.Storage.Database,
-		Incoming:   cfg.Storage.IncomingDirectory,
-		Processed:  cfg.Storage.ProcessedDirectory,
+		CodexState: codex.StateUnavailable,
+		Database:   cfg.Storage.Database, Incoming: cfg.Storage.IncomingDirectory,
+		Processed: cfg.Storage.ProcessedDirectory,
 	})
 	if err != nil {
 		return err
 	}
+	handlers := &handlerSwitcher{handler: handler}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("listening on loopback address: %w", err)
 	}
-
-	server := &http.Server{
-		Addr:              address,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
+	server := newHTTPServer(address, handlers)
 	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- server.Serve(listener)
-	}()
+	go func() { serveErr <- server.Serve(listener) }()
 
 	localURL := "http://" + address + "/"
 	a.logger.Info("local server ready", "url", localURL)
@@ -138,33 +122,200 @@ func (a *Application) serve(ctx context.Context, cfg config.Config, codexStatus 
 		cancel()
 	}
 
-	select {
-	case err := <-serveErr:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+	var analyzer codex.Runtime
+	startupCtx, cancelStartup := context.WithTimeout(
+		ctx, time.Duration(cfg.Codex.StartupTimeoutSeconds)*time.Second,
+	)
+	analyzer, analyzerErr := a.codex.Start(startupCtx, analyzerConfig(cfg), database)
+	cancelStartup()
+	if analyzerErr != nil || analyzer == nil {
+		if analyzerErr == nil {
+			analyzerErr = errors.New("codex analyzer starter returned no runtime")
 		}
-		return fmt.Errorf("serving local application: %w", err)
-	case <-ctx.Done():
+		a.logger.Warn("codex analyzer unavailable; new imports will be retained", "error", analyzerErr)
+		analyzer = nil
+	} else {
+		status := analyzer.Status()
+		updatedHandler, handlerErr := web.New(address, web.Status{
+			CodexState: status.State, CodexPlan: status.PlanType,
+			Database: cfg.Storage.Database, Incoming: cfg.Storage.IncomingDirectory,
+			Processed: cfg.Storage.ProcessedDirectory,
+		})
+		if handlerErr != nil {
+			return errors.Join(
+				handlerErr,
+				shutdownServer(server, serveErr, cfg.Server.ShutdownTimeoutSeconds),
+				analyzer.Close(),
+			)
+		}
+		handlers.Store(updatedHandler)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(
+	coordinator, err := importer.NewCoordinator(
+		coordinatorConfig, database, store, imageinspect.New(), analyzer, a.logger,
+	)
+	if err != nil {
+		var analyzerCloseErr error
+		if analyzer != nil {
+			analyzerCloseErr = analyzer.Close()
+		}
+		return errors.Join(
+			err,
+			shutdownServer(server, serveErr, cfg.Server.ShutdownTimeoutSeconds),
+			analyzerCloseErr,
+		)
+	}
+	processingCtx, cancelProcessing := context.WithCancel(ctx)
+	processingDone := make(chan error, 1)
+	go func() { processingDone <- coordinator.Run(processingCtx) }()
+
+	processingJoined, runErr := waitForShutdown(ctx, serveErr, processingDone, a.logger)
+	coordinator.StopReservations()
+	serverErr := shutdownServer(server, serveErr, cfg.Server.ShutdownTimeoutSeconds)
+	cancelProcessing()
+	var processingErr error
+	if !processingJoined {
+		processingErr = joinProcessing(processingDone)
+	}
+	var analyzerCloseErr error
+	if analyzer != nil {
+		analyzerCloseErr = analyzer.Close()
+	}
+	cleanupCtx, cancelCleanup := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second,
 	)
+	checkpointErr := database.Checkpoint(cleanupCtx)
+	cancelCleanup()
+	storeCloseErr := store.Close()
+	databaseCloseErr := database.Close()
+	resourcesOpen = false
+
+	return errors.Join(
+		runErr, serverErr, processingErr, analyzerCloseErr,
+		checkpointErr, storeCloseErr, databaseCloseErr,
+	)
+}
+
+func processingConfig(cfg config.Config) importer.CoordinatorConfig {
+	return importer.CoordinatorConfig{
+		Workers: cfg.Processing.Workers, MaxSourceBytes: cfg.Processing.MaxSourceBytes,
+		InspectionLimits: imageinspect.Limits{
+			MaxSourceBytes:        cfg.Processing.MaxSourceBytes,
+			MaxImagePixels:        cfg.Processing.MaxImagePixels,
+			ThumbnailMaxDimension: cfg.Processing.ThumbnailMaxDimension,
+			AnalysisMaxDimension:  cfg.Processing.AnalysisMaxDimension,
+			MaxAnalysisBytes:      cfg.Processing.MaxAnalysisBytes,
+		},
+		ArchiveLimits: importer.ArchiveLimits{
+			MaxEntries:                cfg.Processing.Archive.MaxEntries,
+			MaxEntryBytes:             cfg.Processing.Archive.MaxEntryBytes,
+			MaxTotalUncompressedBytes: cfg.Processing.Archive.MaxTotalUncompressedBytes,
+			MaxCompressionRatio:       cfg.Processing.Archive.MaxCompressionRatio,
+		},
+	}
+}
+
+func analyzerConfig(cfg config.Config) codex.AnalyzerConfig {
+	return codex.AnalyzerConfig{
+		Command: cfg.Codex.Command, Model: cfg.Codex.Model,
+		ReasoningEffort:   cfg.Codex.ReasoningEffort,
+		TurnTimeout:       time.Duration(cfg.Codex.TurnTimeoutSeconds) * time.Second,
+		MaxAttempts:       cfg.Codex.MaxAttempts,
+		InitialRetryDelay: time.Duration(cfg.Codex.InitialRetryDelayMS) * time.Millisecond,
+	}
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr: address, Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+}
+
+func waitForShutdown(
+	ctx context.Context,
+	serveErr <-chan error,
+	processingDone <-chan error,
+	logger *slog.Logger,
+) (bool, error) {
+	processingJoined := false
+	for {
+		select {
+		case err := <-serveErr:
+			if errors.Is(err, http.ErrServerClosed) {
+				return processingJoined, nil
+			}
+
+			return processingJoined, fmt.Errorf("serving local application: %w", err)
+		case err := <-processingDone:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("startup import scan failed", "error", err)
+			}
+			processingJoined = true
+			processingDone = nil
+		case <-ctx.Done():
+			return processingJoined, nil
+		}
+	}
+}
+
+func shutdownServer(server *http.Server, serveErr <-chan error, timeoutSeconds int) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		closeErr := server.Close()
-		if closeErr != nil {
-			return errors.Join(
-				fmt.Errorf("shutting down local server: %w", err),
-				fmt.Errorf("closing local server: %w", closeErr),
-			)
-		}
-		return fmt.Errorf("shutting down local server: %w", err)
+		return errors.Join(
+			fmt.Errorf("shutting down local server: %w", err),
+			wrapCloseError(server.Close()),
+		)
 	}
-	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("joining local server: %w", err)
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("joining local server: %w", err)
+		}
+	default:
 	}
 
 	return nil
+}
+
+func joinProcessing(done <-chan error) error {
+	if done == nil {
+		return nil
+	}
+	err := <-done
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+
+	return err
+}
+
+func wrapCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("closing local server: %w", err)
+}
+
+type handlerSwitcher struct {
+	mu      sync.RWMutex
+	handler http.Handler
+}
+
+func (switcher *handlerSwitcher) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	switcher.mu.RLock()
+	handler := switcher.handler
+	switcher.mu.RUnlock()
+	handler.ServeHTTP(writer, request)
+}
+
+func (switcher *handlerSwitcher) Store(handler http.Handler) {
+	switcher.mu.Lock()
+	switcher.handler = handler
+	switcher.mu.Unlock()
 }

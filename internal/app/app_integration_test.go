@@ -30,7 +30,7 @@ func TestRunBootstrapsServesLaunchesAndShutsDown(t *testing.T) {
 	application := New(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		launcher,
-		staticCodexChecker{status: codex.Status{State: codex.StateReady, PlanType: "plus"}},
+		staticCodexStarter{},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -70,7 +70,7 @@ func TestRunRefusesDatabaseRemovalWithRetainedProcessedData(t *testing.T) {
 	application := New(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		launcher,
-		staticCodexChecker{status: codex.Status{State: codex.StateReady, PlanType: "plus"}},
+		staticCodexStarter{},
 	)
 
 	firstCtx, firstCancel := context.WithCancel(context.Background())
@@ -119,13 +119,16 @@ type recordingLauncher struct {
 	called chan string
 }
 
-type staticCodexChecker struct {
-	status codex.Status
-	err    error
+type staticCodexStarter struct {
+	err error
 }
 
-func (c staticCodexChecker) Check(context.Context, string) (codex.Status, error) {
-	return c.status, c.err
+func (c staticCodexStarter) Start(
+	context.Context,
+	codex.AnalyzerConfig,
+	codex.AttemptRecorder,
+) (codex.Runtime, error) {
+	return nil, c.err
 }
 
 func (l *recordingLauncher) Open(_ context.Context, targetURL string) error {
