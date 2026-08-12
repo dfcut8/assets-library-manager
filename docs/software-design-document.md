@@ -5,7 +5,7 @@
 | Attribute | Value |
 | --- | --- |
 | Status | Draft |
-| Version | 0.2 |
+| Version | 0.3 |
 | Last updated | 2026-08-12 |
 | Intended audience | Implementers and maintainers |
 
@@ -13,7 +13,7 @@
 
 Asset Library Manager is a local web application for importing, organizing, describing, searching, and retrieving image assets. It is intended for a single trusted user and is not designed to be published on the Internet or exposed to a local network.
 
-The application is implemented in Go 1.26 or newer and distributed as one self-contained executable. The executable embeds the web UI, HTMX library, styles, templates, and database migrations. Runtime state consists of a required JSON configuration file, a SQLite database, an incoming directory, and a processed-assets directory located beside the executable. OpenAI is the only external runtime service.
+The application is implemented in Go 1.26 or newer and distributed as one self-contained executable. The executable embeds the web UI, HTMX library, styles, templates, and database migrations. Runtime state consists of an optional-on-first-run JSON configuration file, a SQLite database, an incoming directory, and a processed-assets directory located beside the executable. Missing runtime state is bootstrapped automatically when doing so cannot orphan managed data. OpenAI is the only external runtime service.
 
 This document defines the v1 behavior and the boundaries within which implementation decisions may be made.
 
@@ -92,7 +92,9 @@ All application paths are resolved from the application root, not the shell's cu
       <title-slug>--<sha256-prefix>.<ext>
 ```
 
-The application creates `incoming/`, `processed/`, and `processed/.staging/` when they do not exist. `config.json` is required. The database is created and migrated automatically. After startup validation, all routine incoming and processed-file operations use Go's root-scoped filesystem API (`os.Root`) with validated relative paths; string-prefix containment checks are not a security boundary.
+The application atomically creates a default `config.json` when it is absent, then creates `incoming/`, `processed/`, and `processed/.staging/` when they do not exist. A missing database is created and migrated automatically only when `processed/` is absent or contains no managed or staged content. Empty directories and an empty `processed/.staging/` do not count as content. Any file at any managed depth, or any entry inside `.staging/`, causes a fatal recovery error before the database file or directories are created. After startup validation, all routine incoming and processed-file operations use Go's root-scoped filesystem API (`os.Root`) with validated relative paths; string-prefix containment checks are not a security boundary.
+
+An existing corrupt, unreadable, incompatible, or migration-checksum-conflicted database is evidence, not disposable state. Startup preserves it and exits non-zero. The supported recovery is to restore the matching `assets.db` or move the processed content to a safe location before intentionally creating a new catalog.
 
 The application must reject configuration in which paths overlap, escape the application root, refer through symlinks outside the application root, or cause `incoming/`, `processed/`, and the database to alias one another.
 
@@ -271,6 +273,7 @@ Repository errors must expose not-found and conflict semantics through `errors.I
   "server": {
     "host": "127.0.0.1",
     "port": 7342,
+    "open_browser": true,
     "shutdown_timeout_seconds": 15
   },
   "storage": {
@@ -293,6 +296,7 @@ Repository errors must expose not-found and conflict semantics through `errors.I
     }
   },
   "openai": {
+    "api_key": "",
     "model": "gpt-5.6-terra",
     "reasoning_effort": "medium",
     "image_detail": "auto",
@@ -307,6 +311,7 @@ Repository errors must expose not-found and conflict semantics through `errors.I
 
 - `server.host` must parse as an IPv4 or IPv6 loopback address. Wildcard, LAN, and public addresses are invalid.
 - `server.port` must be between 1 and 65535.
+- `server.open_browser` defaults to `true` and controls only the non-fatal post-start browser launch.
 - `server.shutdown_timeout_seconds` must be positive and is capped by a hard implementation ceiling.
 - Storage paths must be non-empty, relative, normalized paths contained by the application root.
 - Storage paths must not overlap or resolve through symlinks outside the application root.
@@ -316,13 +321,23 @@ Repository errors must expose not-found and conflict semantics through `errors.I
 - `reasoning_effort` accepts values supported by the configured model; configuration validation may defer model-specific rejection to the API.
 - `image_detail` accepts `low`, `high`, or `auto`.
 - Retry attempts include the initial attempt and must be between 1 and 10.
-- `OPENAI_API_KEY` is read from the process environment, never from JSON.
+- `openai.api_key` is the sole API-key source. It may be empty, must not contain leading/trailing whitespace or control characters, and is redacted from logs. `OPENAI_API_KEY` and other environment variables are ignored.
 
 The sample model is not a permanent compatibility promise. As of this document's date, the official OpenAI model documentation describes GPT-5.6 Terra as balancing intelligence and cost and lists image input, the Responses endpoint, Structured Outputs, and `medium` as the default reasoning effort. The model and effort remain configuration values so they can change without rebuilding the application. Because GPT-5.6 may preserve original image dimensions for `auto` detail, the application always sends the locally bounded analysis rendition rather than an unbounded managed original. See [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) and [GPT-5.6 model guidance](https://developers.openai.com/api/docs/guides/latest-model) in the official OpenAI documentation.
 
 ### 7.2 Startup behavior
 
-Fatal configuration, directory, migration, or database errors prevent startup and are written to standard error. A missing or empty `OPENAI_API_KEY` is not fatal: the catalog starts, the UI displays a persistent configuration banner, discovered sources are recorded as blocked, and no source is deleted.
+If `config.json` is missing, defaults are written atomically with restrictive permissions and startup continues. Existing configuration is never overwritten. Fatal configuration, unsafe recovery state, directory, migration, or database errors prevent startup and are written to standard error. A missing or empty `openai.api_key` is not fatal: the catalog starts, the UI displays a persistent configuration banner, discovered sources are recorded as blocked, and no source is deleted.
+
+The missing-database decision matrix is normative:
+
+| State | Startup behavior |
+| --- | --- |
+| Fresh root or absent `processed/` | Create directories and a fully migrated database. |
+| Empty existing runtime directories | Create the database. |
+| Only an empty `processed/.staging/` | Create the database. |
+| Any managed file or any entry within `.staging/` | Return a typed fatal recovery error, create no database, preserve processed data, and exit non-zero. |
+| Existing empty, damaged, unreadable, incompatible, or checksum-conflicted database | Preserve the database and exit non-zero; never replace it automatically. |
 
 ### 7.3 Process lifecycle
 
@@ -345,12 +360,14 @@ No adapter closes a resource it does not own. Constructor failure closes every r
 ### 8.1 Startup order
 
 1. Resolve and canonicalize the application root.
-2. Load and validate `config.json`.
-3. Create and validate managed directories.
-4. Open SQLite, enable required pragmas, and apply migrations.
-5. Reconcile interrupted import and staging states.
-6. Start the loopback HTTP server.
-7. Start exactly one background scan of the configured incoming directory.
+2. Atomically create a default `config.json` if absent, then strictly load and validate it.
+3. Determine whether the configured database is missing. Before creating anything for a missing database, inspect `processed/` for managed or staged entries and fail safely on conflict.
+4. Create and canonicalize missing database parent and managed directories.
+5. Open SQLite. For a new file, apply every embedded checksum-verified migration; for every file, verify migration history, pragmas, FTS5, and integrity. Never replace an existing failed database.
+6. Reconcile interrupted import and staging states.
+7. Start the loopback HTTP server and log its URL.
+8. If configured, request browser launch. Launch failure is logged and is non-fatal.
+9. Start exactly one background scan of the configured incoming directory.
 
 The scan uses a snapshot of regular directory entries sorted by normalized name for predictable operation. Files added after the snapshot are not imported until restart.
 
@@ -428,11 +445,13 @@ Technical metadata includes:
 - Validated format and MIME type.
 - Original byte size and SHA-256 digest.
 - Presence of an alpha channel and visible transparency.
-- Whether the image is animated and its frame count.
+- `encoded_animated` and `encoded_frame_count`, describing animation in the file encoding rather than a visual sheet layout.
 - Up to five dominant sRGB colors as hexadecimal values, excluding effectively transparent pixels.
 - Import, creation, and update timestamps recorded in UTC.
 
-For GIF and animated WebP, animation is preserved in the managed original. The first display frame is used for the thumbnail and AI analysis. The UI must visibly identify animated assets so the static preview is not misleading.
+For GIF and animated WebP, encoded animation is preserved in the managed original. The first display frame is used for the thumbnail and AI analysis. A static PNG can contain a multi-frame sprite sheet while remaining `encoded_animated=false` and `encoded_frame_count=1`; sheet frame count is separate editable semantic metadata. The UI must visibly identify encoded animation so the static preview is not misleading.
+
+Technical metadata is deliberately bounded. Exact transparent/opaque pixel counts, unique-color counts, embedded DPI, and free-form color-model labels from the prototype are not persisted. They are expensive or noisy for retrieval and can be derived again if a later use case justifies them.
 
 The thumbnail must:
 
@@ -550,13 +569,11 @@ Every asset has exactly one primary type:
 | `icon` | Standalone symbolic or inventory icons. |
 | `background` | Backdrops, skyboxes, wallpapers, and parallax layers. |
 | `texture-material` | Textures, materials, patterns, and surface maps. |
-| `tile-tilemap` | Tiles, tilesets, and tilemap-oriented source sheets. |
-| `sprite-spritesheet` | Individual sprites, sprite strips, and sprite sheets. |
 | `vfx` | Particles, spell effects, explosions, smoke, and effect sheets. |
 | `decal` | Graffiti, stains, markings, overlays, and projected details. |
 | `other` | Supported images that do not fit another type. |
 
-Primary type is both a search facet and the import-time directory name.
+Primary type describes content, not visual layout. It is both a search facet and the import-time directory name. Layout is stored independently as `single`, `sprite-sheet`, or `tile-sheet`. Sheet layouts may contain editable, AI-estimated columns, rows, cell width, cell height, frame count, and an optional animation label. Grid fields are either all known and positive or all unknown; frame count cannot exceed grid capacity; tile sheets do not carry animation fields.
 
 ### 9.2 Semantic output
 
@@ -566,24 +583,26 @@ The AI response must conform to a strict schema equivalent to:
 {
   "title": "Mossy Stone Platform Tiles",
   "description": "A pixel-art tileset of moss-covered stone platforms for a side-scrolling forest level.",
-  "primary_type": "tile-tilemap",
+  "primary_type": "environment",
+  "layout": {
+    "kind": "tile-sheet",
+    "columns": 16,
+    "rows": 9,
+    "cell_width": 16,
+    "cell_height": 16,
+    "frame_count": null,
+    "animation_label": null
+  },
   "style": "pixel-art",
   "pixel_art": true,
   "confidence": 0.94,
   "facets": {
     "subject": ["stone-platform", "moss"],
-    "usage": ["platformer", "level-building"],
-    "rendering_style": ["pixel-art", "outlined"],
-    "theme_genre": ["fantasy", "adventure"],
-    "biome": ["forest", "ruins"],
+    "theme": ["fantasy", "forest-ruins"],
     "material": ["stone", "vegetation"],
-    "perspective": ["side-view"],
+    "viewpoint": ["side-view"],
     "composition": ["tileset", "modular"],
-    "mood": ["weathered", "natural"],
-    "palette": ["green", "gray", "earth-tone"],
-    "era": ["medieval-fantasy"],
-    "game_role": ["terrain", "collision-surface"],
-    "properties": ["transparent-background", "tileable"]
+    "palette": ["green", "gray", "earth-tone"]
   }
 }
 ```
@@ -592,13 +611,14 @@ The prompt must request specific visual evidence and avoid guessing proper names
 
 ### 9.3 Tag rules
 
-- Generate broad coverage across subject, usage, pixel-art status, rendering style, theme/genre, biome, material, perspective, composition, mood, palette, era, transparency, tileability, animation, and game-development role.
+- Use facets for subject, theme, viewpoint, palette, material, and composition; add bounded domain facets only when they materially improve retrieval.
 - Aim for 20 to 64 useful tags when the image provides enough evidence; never add filler solely to meet a count.
 - Normalize tags to lowercase kebab-case and cap them at 64 characters.
 - Remove duplicates, near-duplicates, empty tags, and tags already fully represented by objective file format or dimensions.
+- Reject redundant classification booleans and absence-only tags such as `not-character`, `not-terrain`, `not-sprite-sheet`, and `non-pixel-art`. Presence is represented by the controlled type, layout, pixel-art field, technical metadata, or a positive tag.
 - Keep a facet on each tag so filters can distinguish, for example, material `stone` from palette `stone-gray`.
 - Store a stable tag slug and a human-readable label.
-- Add deterministic property tags after local inspection where appropriate, including `animated`, `has-transparency`, and orientation.
+- Add deterministic property tags after local inspection where appropriate, including `encoded-animated`, `has-transparency`, and orientation. Sheet animation remains represented by layout metadata.
 - AI tags are suggestions, not facts. Users may add or remove tags and correct type, style, and pixel-art status.
 
 ### 9.4 AI provenance and edits
@@ -668,7 +688,8 @@ Database migrations are embedded, ordered, checksum-verified, transactional wher
 
 | Entity | Important fields and constraints |
 | --- | --- |
-| `assets` | Application-generated 128-bit random text ID; unique full SHA-256; original filename; managed relative path; validated format/MIME; technical fields; current semantic fields; optimistic version; state; timestamps. Only `ready` assets appear in normal catalog results. |
+| `assets` | Application-generated 128-bit random text ID; unique full SHA-256; original filename; managed relative path; validated format/MIME; bounded technical fields including encoded animation; controlled primary type; independent layout kind; current semantic fields; optimistic version; state; timestamps. Only `ready` assets appear in normal catalog results. |
+| `asset_sheet_layouts` | Optional one-to-one details for sprite/tile sheets: controlled kind matching the asset, estimated columns/rows and cell dimensions, sprite frame count, optional animation label, and update time. |
 | `thumbnails` | One-to-one asset ID; `image/png`; width; height; byte length; BLOB; foreign key with cascade. |
 | `tags` | UUID or integer key; unique `(facet, slug)`; display label. |
 | `asset_tags` | Unique asset/tag pair; origin (`ai`, `deterministic`, or `user`); timestamps. |
@@ -681,7 +702,9 @@ The database must constrain full digests, managed paths, normalized tags, state 
 
 ### 11.3 Full-text search
 
-Use an FTS5 external-content index covering current title, description, original filename, style, and a flattened tag string. Repository methods synchronize the index explicitly in the same transaction as catalog mutations. Hidden trigger side effects are not used.
+Use an FTS5 external-content index covering current title, description, original filename, style, and a flattened tag string. Versioned migration triggers keep the external-content index synchronized with catalog inserts, relevant updates, and deletes. Repository integration tests verify those trigger effects as part of the schema contract.
+
+Catalog and processing summaries are SQL queries or views over authoritative rows. Prototype-only batch fields such as generation timestamps, discovered/analyzed totals, unreadable totals, and aggregate type counters are not persisted as catalog state.
 
 Search behavior:
 
@@ -816,8 +839,8 @@ Authentication is intentionally absent because the process is loopback-only and 
 
 ### 13.4 Secret and external-data protections
 
-- Read `OPENAI_API_KEY` only in the server process and redact credentials from errors and logs.
-- Do not write the key into SQLite, config examples generated at runtime, HTML, or client-side JavaScript.
+- Read `openai.api_key` only from the server-side `config.json`; deliberately ignore `OPENAI_API_KEY` and all other environment key sources.
+- Create the generated config with restrictive permissions where supported, redact the key from errors and logs, and do not write it into SQLite, HTML, or client-side JavaScript.
 - Send only required image content and classification instructions to OpenAI.
 - Make the external-data boundary clear in setup documentation and the processing UI.
 - Do not claim offline processing or local-only image analysis.
@@ -836,7 +859,7 @@ The application exports no remote telemetry, analytics, metrics listener, tracin
 
 | Class | Examples | Behavior |
 | --- | --- | --- |
-| Fatal startup | Invalid JSON, unsafe paths, migration failure, database unavailable | Log and exit non-zero before scanning. |
+| Fatal startup | Invalid JSON, unsafe paths, managed/staged content without its database, migration failure, database unavailable or damaged | Return a typed/wrapped error, log once, preserve evidence, and exit non-zero before listening or scanning. |
 | Configuration-blocked | Missing API key, unsupported configured model | Serve existing catalog, mark new imports blocked, retain sources. |
 | Retryable external | Timeout, connection reset, rate limit, eligible server error | Retry with bounded backoff; retain on exhaustion. |
 | Permanent external | Invalid credentials, refusal, unsupported input | Do not retry indefinitely; record failure and retain source. |
@@ -856,14 +879,15 @@ Tests are executable behavior contracts. Unit cases are table-driven with named 
 
 ### 15.1 Unit tests
 
-- Configuration parsing, unknown fields, numeric bounds, loopback validation, and executable-relative paths (`FR-001`, `FR-002`).
+- Configuration creation and permissions, defaults, strict parsing, duplicate/unknown fields, non-overwrite behavior, secret redaction, ignored environment key, numeric bounds, loopback validation, and executable-relative paths (`FR-001`, `FR-002`).
+- Missing-database guard cases: absent/empty processed directory, empty staging root, managed files at nested depth, staged file/directory entries, symlinks and special entries. Conflict cases assert a typed fatal error, no database creation, no processed-data mutation, and actionable restore/move guidance.
 - Canonical containment, overlap, traversal, symlink, and reserved-name checks (`NFR-006`).
 - Extension/magic matching and MIME detection for each supported format (`FR-005`, `FR-006`).
 - SHA-256 calculation and duplicate lookup decisions (`FR-007`, `NFR-003`).
 - Image dimensions, orientation, alpha, animation/frame count, palette extraction, and pixel limits (`FR-008`).
 - Thumbnail bounds, aspect ratio, transparency, orientation, encoding, and no-upscale behavior (`FR-008`).
 - Slug normalization, canonical extensions, hash suffixes, path length, reserved names, and collision behavior (`FR-010`).
-- Tag normalization, facet validation, deduplication, controlled primary types, and output-schema validation (`FR-009`, `FR-014`).
+- Tag normalization, absence-only rejection, facet validation, deduplication, controlled primary types, independent layout/grid validation, and output-schema validation (`FR-009`, `FR-014`). Prototype regression cases include a static-encoded 4×4 vehicle sprite sheet with 16 semantic frames, 16×9 environment tile sheets, and a single terrain tile.
 - Retry classification, attempt count, exponential backoff, jitter bounds, and cancellation (`FR-009`).
 - Root-context propagation, queue backpressure, worker cancellation, channel ownership, and graceful shutdown ordering (`NFR-010`).
 - ZIP traversal, absolute paths, symlinks, nested archives, file-count limits, compression bombs, truncated entries, and benign metadata (`NFR-006`, `NFR-008`).
@@ -874,6 +898,7 @@ Fuzz targets cover JSON configuration tokenization, slug and tag normalization, 
 ### 15.2 Integration tests
 
 - Apply all migrations to an empty database and reopen an existing database (`FR-011`).
+- Verify migration checksums, required pragmas, FTS5, external-content synchronization, corruption/permission failures, and preservation of every failed existing database.
 - Verify required SQLite pragmas, constraints, foreign keys, and FTS5 availability.
 - Search title, description, original filename, style, and tags; combine all documented filters and sorts (`FR-013`).
 - Update semantic metadata transactionally and synchronize full-text search (`FR-014`).
@@ -893,8 +918,8 @@ Integration tests use the `integration` build tag and run separately with cache 
 ### 15.3 End-to-end tests
 
 1. Build the CGO-disabled binary for the test host.
-2. Place the binary and valid `config.json` in a temporary application root.
-3. Populate `incoming/` with loose images, duplicates, and an archive.
+2. Place only the binary in a temporary application root; verify default config, directories, and a migrated database are generated. Restart successfully, remove the database while retaining a processed file, and verify safe non-zero refusal with no replacement database or file mutation.
+3. Repeat with a binary plus valid `config.json`, then populate `incoming/` with loose images, duplicates, and an archive.
 4. Start the binary with a mocked OpenAI endpoint or transport.
 5. Verify that the catalog becomes available before processing completes.
 6. Observe processing status, then search, filter, sort, view, and edit ready assets.
@@ -931,14 +956,19 @@ The v1 implementation is acceptable when:
 
 - One cross-platform Go binary contains the application server and all UI/migration resources.
 - The binary has no runtime Node.js, CDN, browser-extension, or CGO requirement.
+- Copying only the binary to a fresh writable directory generates default configuration, managed directories, and a fully migrated database without confirmation.
+- Copying the binary plus a valid config uses that config without overwriting it; the API key is sourced only from `openai.api_key`.
+- A missing database with only absent/empty processed directories is recreated, while managed or staged content without a database produces an actionable non-zero refusal and remains byte-for-byte untouched.
+- An existing empty, corrupt, unreadable, incompatible, or checksum-conflicted database is preserved and never silently replaced.
 - It listens only on the configured loopback address.
+- Successful startup logs the loopback URL and honors `server.open_browser`; browser-launch failure does not stop the server.
 - All long-lived goroutines are owned, cancelable, joinable, and verified leak-free during graceful shutdown tests.
 - Existing assets remain browsable and editable without working OpenAI credentials or connectivity.
 - A startup scan imports supported loose and archived images using the documented workflow.
 - Original managed bytes match their import bytes exactly.
 - Thumbnails are stored in SQLite and remain within the specified bounds.
 - Required technical and semantic metadata are visible and searchable or filterable.
-- Rich tags identify pixel art and distinguish character, terrain, and the other controlled asset types.
+- Rich positive tags and facets identify visual content; primary content type, sheet layout, and encoded animation remain separate controlled concepts.
 - Repeated imports and restarts do not create duplicate managed assets.
 - No source is deleted before durable success, and partial/unsafe archives are retained.
 - Incoming and processed-file operations are root-scoped, source bytes are rehashed before deletion, and crash recovery verifies full managed-file digests.

@@ -1,0 +1,41 @@
+{{define "assets.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asset Library Manager</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Local asset catalog</p>
+      <h1>Asset Library Manager is running</h1>
+      <p>The runnable foundation is initialized. Image importing and catalog browsing arrive in later milestones.</p>
+    </header>
+
+    {{if .APIKeyConfigured}}
+    <section class="status good" aria-label="OpenAI status">
+      <strong>OpenAI configured</strong>
+      <span>An API key is present in config.json.</span>
+    </section>
+    {{else}}
+    <section class="status warning" aria-label="OpenAI status">
+      <strong>OpenAI not configured</strong>
+      <span>Add <code>openai.api_key</code> to config.json, then restart. Existing catalog data remains available without it.</span>
+    </section>
+    {{end}}
+
+    <section>
+      <h2>Runtime layout</h2>
+      <dl>
+        <div><dt>Database</dt><dd><code>{{.Database}}</code></dd></div>
+        <div><dt>Incoming</dt><dd><code>{{.Incoming}}</code></dd></div>
+        <div><dt>Processed</dt><dd><code>{{.Processed}}</code></dd></div>
+      </dl>
+    </section>
+  </main>
+</body>
+</html>
+{{end}}
