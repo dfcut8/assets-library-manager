@@ -1,4 +1,4 @@
-// Package config loads, creates, and validates the executable-relative JSON configuration.
+// Package config provides compiled defaults and validates optional executable-relative overrides.
 package config
 
 import (
@@ -75,7 +75,7 @@ type CodexConfig struct {
 	InitialRetryDelayMS   int    `json:"initial_retry_delay_ms"`
 }
 
-// Default returns the configuration written on first startup.
+// Default returns the complete configuration used when no file overrides it.
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
@@ -115,74 +115,23 @@ func Default() Config {
 	}
 }
 
-// LoadOrCreate writes a default config when missing, then strictly loads and validates it.
-func LoadOrCreate(root string) (Config, bool, error) {
+// Load returns compiled defaults overlaid by config.json when that file exists.
+func Load(root string) (Config, error) {
 	path := filepath.Join(root, FileName)
-	wasCreated := false
-
-	if _, err := os.Stat(path); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return Config{}, false, fmt.Errorf("stating config: %w", err)
-		}
-
-		created, createErr := createDefault(path, Default())
-		if createErr != nil {
-			return Config{}, false, fmt.Errorf("creating default config: %w", createErr)
-		}
-		wasCreated = created
-	}
-
 	cfg, err := load(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		cfg = Default()
+		if err := cfg.Validate(); err != nil {
+			return Config{}, fmt.Errorf("validating compiled defaults: %w", err)
+		}
+
+		return cfg, nil
+	}
 	if err != nil {
-		return Config{}, wasCreated, err
+		return Config{}, err
 	}
 
-	return cfg, wasCreated, nil
-}
-
-func createDefault(path string, cfg Config) (created bool, returnErr error) {
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".config.json-*")
-	if err != nil {
-		return false, fmt.Errorf("creating temporary file: %w", err)
-	}
-	tempName := temp.Name()
-	tempClosed := false
-	defer func() {
-		if !tempClosed {
-			returnErr = errors.Join(returnErr, wrapIfNotNil("closing temporary config", temp.Close()))
-		}
-		if err := os.Remove(tempName); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			returnErr = errors.Join(returnErr, fmt.Errorf("removing temporary config: %w", err))
-		}
-	}()
-
-	if err := temp.Chmod(0o600); err != nil {
-		return false, fmt.Errorf("restricting temporary file: %w", err)
-	}
-
-	encoder := json.NewEncoder(temp)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(cfg); err != nil {
-		return false, fmt.Errorf("encoding defaults: %w", err)
-	}
-	if err := temp.Sync(); err != nil {
-		return false, fmt.Errorf("syncing defaults: %w", err)
-	}
-	if err := temp.Close(); err != nil {
-		tempClosed = true
-		return false, fmt.Errorf("closing defaults: %w", err)
-	}
-	tempClosed = true
-
-	if err := os.Link(tempName, path); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("publishing defaults: %w", err)
-	}
-
-	return true, nil
+	return cfg, nil
 }
 
 func load(path string) (Config, error) {

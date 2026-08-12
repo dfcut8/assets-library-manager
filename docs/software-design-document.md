@@ -85,7 +85,7 @@ All application paths are resolved from the application root, not the shell's cu
 ```text
 <application-root>/
   asset-library-manager[.exe]
-  config.json
+  config.json                     # optional overrides
   assets.db
   incoming/
   processed/
@@ -94,7 +94,7 @@ All application paths are resolved from the application root, not the shell's cu
       <title-slug>--<sha256-prefix>.<ext>
 ```
 
-The application atomically creates a default `config.json` when it is absent, then creates `incoming/`, `processed/`, and `processed/.staging/` when they do not exist. A missing database is created and migrated automatically only when `processed/` is absent or contains no managed or staged content. Empty directories and an empty `processed/.staging/` do not count as content. Any file at any managed depth, or any entry inside `.staging/`, causes a fatal recovery error before the database file or directories are created. After startup validation, all routine incoming and processed-file operations use Go's root-scoped filesystem API (`os.Root`) with validated relative paths; string-prefix containment checks are not a security boundary.
+The application uses a complete validated configuration compiled into the binary. When `config.json` exists, its fields overlay those defaults; when it is absent, startup does not create it. The application creates `incoming/`, `processed/`, and `processed/.staging/` when they do not exist. A missing database is created and migrated automatically only when `processed/` is absent or contains no managed or staged content. Empty directories and an empty `processed/.staging/` do not count as content. Any file at any managed depth, or any entry inside `.staging/`, causes a fatal recovery error before the database file or directories are created. After startup validation, all routine incoming and processed-file operations use Go's root-scoped filesystem API (`os.Root`) with validated relative paths; string-prefix containment checks are not a security boundary.
 
 An existing corrupt, unreadable, incompatible, or migration-checksum-conflicted database is evidence, not disposable state. Startup preserves it and exits non-zero. The supported recovery is to restore the matching `assets.db` or move the processed content to a safe location before intentionally creating a new catalog.
 
@@ -269,7 +269,7 @@ Repository errors must expose not-found and conflict semantics through `errors.I
 
 ## 7. Configuration
 
-`config.json` must be valid JSON and is loaded once at startup through a size-limited reader. Configuration reload requires an application restart. Unknown fields, duplicate object keys, trailing JSON values, and non-finite or overflowing numbers are rejected so ambiguous configuration never reaches runtime.
+`config.json` is optional. The binary provides every setting with a validated compiled default; objects and fields present in the file overlay those defaults. When present, the file must be valid JSON and is loaded once at startup through a size-limited reader. Configuration reload requires an application restart. Unknown fields, duplicate object keys, trailing JSON values, and non-finite or overflowing numbers are rejected so ambiguous configuration never reaches runtime.
 
 ```json
 {
@@ -332,7 +332,7 @@ The sample model is not a permanent compatibility promise. The model and effort 
 
 ### 7.2 Startup behavior
 
-If `config.json` is missing, defaults are written atomically with restrictive permissions and startup continues. Existing configuration is never overwritten. Fatal configuration, unsafe recovery state, directory, migration, or database errors prevent startup and are written to standard error.
+If `config.json` is missing, startup uses compiled defaults without creating the file. Existing configuration is never overwritten. Fatal configuration, unsafe recovery state, directory, migration, or database errors prevent startup and are written to standard error.
 
 After SQLite initialization and before serving, startup performs a bounded Codex preflight: resolve `codex.command`, start `<command> app-server --listen stdio://`, send `initialize`, send `initialized`, and call `account/read`. The preflight is ready only when the returned account type is `chatgpt`. A missing command, protocol failure, timeout, signed-out account, API-key account, or unsupported account is nonfatal: the catalog starts, the UI displays actionable guidance, discovered sources are recorded as blocked, and no source is deleted. The short-lived preflight process is always canceled and joined. A production analyzer may start a managed long-lived App Server only when work is available and must repeat or refresh the account check before accepting work.
 
@@ -367,7 +367,7 @@ No adapter closes a resource it does not own. Constructor failure closes every r
 ### 8.1 Startup order
 
 1. Resolve and canonicalize the application root.
-2. Atomically create a default `config.json` if absent, then strictly load and validate it.
+2. Initialize compiled defaults, overlay `config.json` when present, then strictly validate the result.
 3. Determine whether the configured database is missing. Before creating anything for a missing database, inspect `processed/` for managed or staged entries and fail safely on conflict.
 4. Create and canonicalize missing database parent and managed directories.
 5. Open SQLite. For a new file, apply every embedded checksum-verified migration; for every file, verify migration history, pragmas, FTS5, and integrity. Never replace an existing failed database.
@@ -935,7 +935,7 @@ Integration tests use the `integration` build tag and run separately with cache 
 ### 15.3 End-to-end tests
 
 1. Build the CGO-disabled binary for the test host.
-2. Place only the binary in a temporary application root; verify default config, directories, and a migrated database are generated. Restart successfully, remove the database while retaining a processed file, and verify safe non-zero refusal with no replacement database or file mutation.
+2. Place only the binary in a temporary application root; verify compiled defaults are used without generating a config file, while directories and a migrated database are generated. Restart successfully, remove the database while retaining a processed file, and verify safe non-zero refusal with no replacement database or file mutation.
 3. Repeat with a binary plus valid `config.json`, then populate `incoming/` with loose images, duplicates, and an archive.
 4. Start the binary with a fake Codex command that implements the App Server stdio protocol and reports ChatGPT authentication.
 5. Verify that the catalog becomes available before processing completes.
@@ -973,7 +973,7 @@ The v1 implementation is acceptable when:
 
 - One cross-platform Go binary contains the application server and all UI/migration resources.
 - The application binary has no runtime Node.js, CDN, browser-extension, or CGO requirement; AI processing clearly reports the separate Codex CLI and ChatGPT-login prerequisite.
-- Copying only the binary to a fresh writable directory generates default configuration, managed directories, and a fully migrated database without confirmation.
+- Copying only the binary to a fresh writable directory uses compiled defaults without generating configuration, and creates managed directories and a fully migrated database without confirmation.
 - Copying the binary plus a valid config uses that config without overwriting it; no OpenAI API key is accepted or stored.
 - A missing database with only absent/empty processed directories is recreated, while managed or staged content without a database produces an actionable non-zero refusal and remains byte-for-byte untouched.
 - An existing empty, corrupt, unreadable, incompatible, or checksum-conflicted database is preserved and never silently replaced.
