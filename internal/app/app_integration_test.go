@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/config"
 	"github.com/dfcut8/assets-library-manager/internal/storage"
 )
@@ -26,7 +27,11 @@ func TestRunBootstrapsServesLaunchesAndShutsDown(t *testing.T) {
 	cfg.Server.Port = availablePort(t)
 	writeApplicationConfig(t, root, cfg)
 	launcher := &recordingLauncher{called: make(chan string, 1)}
-	application := New(slog.New(slog.NewJSONHandler(io.Discard, nil)), launcher)
+	application := New(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		launcher,
+		staticCodexChecker{status: codex.Status{State: codex.StateReady, PlanType: "plus"}},
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -62,7 +67,11 @@ func TestRunRefusesDatabaseRemovalWithRetainedProcessedData(t *testing.T) {
 	cfg.Server.Port = availablePort(t)
 	writeApplicationConfig(t, root, cfg)
 	launcher := &recordingLauncher{called: make(chan string, 1)}
-	application := New(slog.New(slog.NewJSONHandler(io.Discard, nil)), launcher)
+	application := New(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		launcher,
+		staticCodexChecker{status: codex.Status{State: codex.StateReady, PlanType: "plus"}},
+	)
 
 	firstCtx, firstCancel := context.WithCancel(context.Background())
 	firstDone := make(chan error, 1)
@@ -108,6 +117,15 @@ func TestRunRefusesDatabaseRemovalWithRetainedProcessedData(t *testing.T) {
 type recordingLauncher struct {
 	mu     sync.Mutex
 	called chan string
+}
+
+type staticCodexChecker struct {
+	status codex.Status
+	err    error
+}
+
+func (c staticCodexChecker) Check(context.Context, string) (codex.Status, error) {
+	return c.status, c.err
 }
 
 func (l *recordingLauncher) Open(_ context.Context, targetURL string) error {

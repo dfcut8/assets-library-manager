@@ -7,9 +7,34 @@ A release is a single CGO-free executable. You need:
 - Windows, macOS, or Linux on a supported release architecture.
 - Permission to create files beside the executable.
 - A graphical browser only if automatic browser launch is enabled.
-- An OpenAI API key only for future AI categorization; startup and the local catalog do not require one.
+- A compatible [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) on `PATH` and signed in with ChatGPT for subscription-backed AI processing.
 
-There is no installer and no runtime dependency on Go, Node.js, a separate database server, or environment variables.
+There is no application-side runtime dependency on Go, Node.js, a separate database server, or environment variables. Codex is a separate host prerequisite for AI processing; the catalog remains available when it is missing or unavailable.
+
+## Prepare Codex subscription access
+
+1. Install or update the Codex CLI using the official platform-specific instructions.
+2. Confirm the command is visible to the process environment that will launch Asset Library Manager:
+
+   ```text
+   codex --version
+   ```
+
+3. Sign in with the ChatGPT account whose subscription allowance should be used:
+
+   ```text
+   codex login
+   ```
+
+   Complete the browser flow and choose ChatGPT subscription access. Do not select API-key authentication.
+
+4. Verify the cached login:
+
+   ```text
+   codex login status
+   ```
+
+Asset Library Manager starts `codex app-server --listen stdio://` itself. The Codex desktop app and a manually started App Server do not need to be running. Codex owns credential storage and refresh; Asset Library Manager never reads its credential files or operating-system keyring entries.
 
 ## Binary-only setup
 
@@ -44,9 +69,34 @@ The important settings are:
 - `server.port`: the local HTTP port; default `7342`.
 - `server.open_browser`: opens the local URL after successful initialization; default `true`. A launch failure is logged but does not stop the server.
 - `storage.*`: normalized paths beneath the executable directory. Use `/` as the separator on every platform (for example, `data/assets.db`, including on Windows).
-- `openai.api_key`: the only supported OpenAI API-key source. `OPENAI_API_KEY` is ignored.
+- `codex.command`: Codex executable name or explicit path; default `codex`.
+- `codex.model` and `codex.reasoning_effort`: model settings for future image-analysis turns.
+- `codex.startup_timeout_seconds`: maximum time for the startup App Server/authentication preflight.
+- `codex.turn_timeout_seconds`, `codex.max_attempts`, and `codex.initial_retry_delay_ms`: bounds for future analysis turns.
 
-Because `config.json` contains a credential, do not commit it, share it, or include it in diagnostics. Restrict access to the application directory using operating-system permissions. The application redacts the key from structured configuration logs and never sends it to the browser or stores it in SQLite.
+`config.json` contains no OpenAI credential. Keep it out of source control because it still describes local paths and runtime policy. `OPENAI_API_KEY` is ignored.
+
+## Startup preflight and status
+
+After configuration, storage, and SQLite initialize, Asset Library Manager performs a bounded preflight:
+
+1. Resolve `codex.command` through `PATH` or use its explicit path.
+2. Start a short-lived App Server over stdio.
+3. Complete the protocol `initialize`/`initialized` handshake.
+4. Call `account/read` and require account type `chatgpt`.
+5. Cancel and join the preflight process.
+
+The status page reports one of these outcomes:
+
+| Status | Meaning and action |
+| --- | --- |
+| Codex subscription ready | The App Server responded and is signed in with ChatGPT. |
+| Codex sign-in required | Run `codex login`, complete ChatGPT login, and restart the application. |
+| Codex is using an API key | Run `codex logout`, then `codex login` and choose ChatGPT subscription access. |
+| Unsupported Codex account | Switch Codex to a ChatGPT account. |
+| Codex unavailable | Install/update Codex, fix `codex.command` or `PATH`, and restart. Inspect the `codex preflight failed` structured log for bounded technical details. |
+
+Every non-ready outcome blocks only new AI processing. The HTTP server, existing catalog, and recovery-safe local state still start.
 
 ## Generated artifacts and startup behavior
 
@@ -89,7 +139,7 @@ Treat `assets.db` and `processed/` as one inseparable backup set. For a consiste
 
 1. Stop the application normally.
 2. Copy `assets.db` and the complete `processed/` directory together.
-3. Copy `config.json` separately using secret-safe storage if you need to preserve the API key.
+3. Copy `config.json` separately if you need to preserve local runtime settings. Codex credentials are not stored in the application directory and must not be added to this backup.
 4. Restart the application.
 
 Do not back up only `assets.db` while the process is running; WAL data may not yet be in the main file. If the database is lost but processed files remain, restore the matching database backup. Moving processed files away allows an intentional fresh catalog, but this milestone does not re-import those managed files automatically.

@@ -3,11 +3,9 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -22,8 +20,8 @@ func TestLoadOrCreateGeneratesDefaultsAndIgnoresEnvironment(t *testing.T) {
 	if !created {
 		t.Fatal("LoadOrCreate() created = false, want true")
 	}
-	if cfg.OpenAI.APIKey != "" {
-		t.Fatalf("OpenAI API key = %q, want empty", cfg.OpenAI.APIKey)
+	if cfg.Codex.Command != "codex" {
+		t.Fatalf("Codex command = %q, want codex", cfg.Codex.Command)
 	}
 	if !cfg.Server.OpenBrowser {
 		t.Fatal("OpenBrowser = false, want true")
@@ -43,7 +41,7 @@ func TestLoadOrCreatePreservesExistingConfig(t *testing.T) {
 	root := t.TempDir()
 	want := Default()
 	want.Server.Port = 8123
-	want.OpenAI.APIKey = "configured-secret"
+	want.Codex.Command = "custom-codex"
 	writeConfig(t, root, want)
 	original, err := os.ReadFile(filepath.Join(root, FileName))
 	if err != nil {
@@ -57,7 +55,7 @@ func TestLoadOrCreatePreservesExistingConfig(t *testing.T) {
 	if created {
 		t.Fatal("LoadOrCreate() created = true, want false")
 	}
-	if got.Server.Port != want.Server.Port || got.OpenAI.APIKey != want.OpenAI.APIKey {
+	if got.Server.Port != want.Server.Port || got.Codex.Command != want.Codex.Command {
 		t.Fatalf("LoadOrCreate() = %#v, want preserved values", got)
 	}
 	after, err := os.ReadFile(filepath.Join(root, FileName))
@@ -79,6 +77,9 @@ func TestLoadRejectsInvalidJSONAndPaths(t *testing.T) {
 		"windows path traversal":     `{"storage":{"processed_directory":"..\\outside"}}`,
 		"windows drive path":         `{"storage":{"processed_directory":"C:/outside"}}`,
 		"windows network share path": `{"storage":{"processed_directory":"//server/share"}}`,
+		"blank codex command":        `{"codex":{"command":" "}}`,
+		"control in codex command":   `{"codex":{"command":"codex\u0007"}}`,
+		"invalid reasoning effort":   `{"codex":{"reasoning_effort":"maximum"}}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -90,19 +91,6 @@ func TestLoadRejectsInvalidJSONAndPaths(t *testing.T) {
 				t.Fatal("LoadOrCreate() error = nil, want validation error")
 			}
 		})
-	}
-}
-
-func TestOpenAIConfigLogValueRedactsSecret(t *testing.T) {
-	var output bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&output, nil))
-	logger.Info("configuration", "openai", OpenAIConfig{APIKey: "do-not-log", Model: "test"})
-
-	if strings.Contains(output.String(), "do-not-log") {
-		t.Fatal("structured log disclosed the API key")
-	}
-	if !strings.Contains(output.String(), `"api_key_configured":true`) {
-		t.Fatalf("structured log = %q, want configured indicator", output.String())
 	}
 }
 

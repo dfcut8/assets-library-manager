@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net"
 	"os"
 	pathpkg "path"
@@ -28,7 +27,7 @@ type Config struct {
 	Server     ServerConfig     `json:"server"`
 	Storage    StorageConfig    `json:"storage"`
 	Processing ProcessingConfig `json:"processing"`
-	OpenAI     OpenAIConfig     `json:"openai"`
+	Codex      CodexConfig      `json:"codex"`
 }
 
 // ServerConfig controls the loopback HTTP server and graceful shutdown.
@@ -65,27 +64,15 @@ type ArchiveConfig struct {
 	MaxCompressionRatio       float64 `json:"max_compression_ratio"`
 }
 
-// OpenAIConfig controls future OpenAI requests. APIKey is deliberately stored only in this file.
-type OpenAIConfig struct {
-	APIKey              string `json:"api_key"`
-	Model               string `json:"model"`
-	ReasoningEffort     string `json:"reasoning_effort"`
-	ImageDetail         string `json:"image_detail"`
-	TimeoutSeconds      int    `json:"timeout_seconds"`
-	MaxAttempts         int    `json:"max_attempts"`
-	InitialRetryDelayMS int    `json:"initial_retry_delay_ms"`
-}
-
-// LogValue prevents accidental API-key disclosure when an OpenAIConfig is passed to slog.
-func (c OpenAIConfig) LogValue() slog.Value {
-	isConfigured := c.APIKey != ""
-
-	return slog.GroupValue(
-		slog.Bool("api_key_configured", isConfigured),
-		slog.String("model", c.Model),
-		slog.String("reasoning_effort", c.ReasoningEffort),
-		slog.String("image_detail", c.ImageDetail),
-	)
+// CodexConfig controls the host-provided Codex App Server and future analysis turns.
+type CodexConfig struct {
+	Command               string `json:"command"`
+	Model                 string `json:"model"`
+	ReasoningEffort       string `json:"reasoning_effort"`
+	StartupTimeoutSeconds int    `json:"startup_timeout_seconds"`
+	TurnTimeoutSeconds    int    `json:"turn_timeout_seconds"`
+	MaxAttempts           int    `json:"max_attempts"`
+	InitialRetryDelayMS   int    `json:"initial_retry_delay_ms"`
 }
 
 // Default returns the configuration written on first startup.
@@ -116,13 +103,14 @@ func Default() Config {
 				MaxCompressionRatio:       200,
 			},
 		},
-		OpenAI: OpenAIConfig{
-			Model:               "gpt-5.6-terra",
-			ReasoningEffort:     "medium",
-			ImageDetail:         "auto",
-			TimeoutSeconds:      90,
-			MaxAttempts:         3,
-			InitialRetryDelayMS: 1000,
+		Codex: CodexConfig{
+			Command:               "codex",
+			Model:                 "gpt-5.6-terra",
+			ReasoningEffort:       "medium",
+			StartupTimeoutSeconds: 10,
+			TurnTimeoutSeconds:    90,
+			MaxAttempts:           3,
+			InitialRetryDelayMS:   1000,
 		},
 	}
 }
@@ -255,7 +243,7 @@ func (c Config) Validate() error {
 	if err := validateProcessing(c.Processing); err != nil {
 		return err
 	}
-	if err := validateOpenAI(c.OpenAI); err != nil {
+	if err := validateCodex(c.Codex); err != nil {
 		return err
 	}
 
@@ -360,31 +348,34 @@ func validateProcessing(cfg ProcessingConfig) error {
 	return nil
 }
 
-func validateOpenAI(cfg OpenAIConfig) error {
-	if cfg.APIKey != strings.TrimSpace(cfg.APIKey) {
-		return errors.New("openai.api_key must not contain leading or trailing whitespace")
+func validateCodex(cfg CodexConfig) error {
+	if cfg.Command == "" || cfg.Command != strings.TrimSpace(cfg.Command) {
+		return errors.New("codex.command must be non-empty without surrounding whitespace")
 	}
-	for _, r := range cfg.APIKey {
+	for _, r := range cfg.Command {
 		if unicode.IsControl(r) {
-			return errors.New("openai.api_key must not contain control characters")
+			return errors.New("codex.command must not contain control characters")
 		}
 	}
 	if cfg.Model == "" {
-		return errors.New("openai.model must not be empty")
+		return errors.New("codex.model must not be empty")
 	}
-	switch cfg.ImageDetail {
-	case "low", "high", "auto":
+	switch cfg.ReasoningEffort {
+	case "low", "medium", "high", "xhigh":
 	default:
-		return errors.New("openai.image_detail must be low, high, or auto")
+		return errors.New("codex.reasoning_effort must be low, medium, high, or xhigh")
 	}
-	if cfg.TimeoutSeconds < 1 || cfg.TimeoutSeconds > 600 {
-		return errors.New("openai.timeout_seconds must be between 1 and 600")
+	if cfg.StartupTimeoutSeconds < 1 || cfg.StartupTimeoutSeconds > 60 {
+		return errors.New("codex.startup_timeout_seconds must be between 1 and 60")
+	}
+	if cfg.TurnTimeoutSeconds < 1 || cfg.TurnTimeoutSeconds > 600 {
+		return errors.New("codex.turn_timeout_seconds must be between 1 and 600")
 	}
 	if cfg.MaxAttempts < 1 || cfg.MaxAttempts > 10 {
-		return errors.New("openai.max_attempts must be between 1 and 10")
+		return errors.New("codex.max_attempts must be between 1 and 10")
 	}
 	if cfg.InitialRetryDelayMS < 1 || cfg.InitialRetryDelayMS > 60_000 {
-		return errors.New("openai.initial_retry_delay_ms must be between 1 and 60000")
+		return errors.New("codex.initial_retry_delay_ms must be between 1 and 60000")
 	}
 
 	return nil
