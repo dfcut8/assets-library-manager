@@ -9,6 +9,22 @@ import (
 	"testing"
 )
 
+func TestDefaultMatchesExampleConfig(t *testing.T) {
+	want, err := json.MarshalIndent(Default(), "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(Default()) error = %v", err)
+	}
+	want = append(want, '\n')
+
+	got, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(config.example.json) error = %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("config.example.json does not match config.Default()")
+	}
+}
+
 func TestLoadOrCreateGeneratesDefaultsAndIgnoresEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "must-not-be-used")
 	root := t.TempDir()

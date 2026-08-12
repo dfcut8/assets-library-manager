@@ -32,3 +32,5 @@ CGO_ENABLED=0 go build ./cmd/asset-library-manager
 ```
 
 Use `make check` on Unix-like systems for the local quality suite.
+
+On Windows, `make install` builds a CGO-free Windows/amd64 executable and installs it with the example configuration in `D:\assets-library`. The target creates `config.json` from the example only when it is missing, so subsequent installs preserve local settings.

@@ -1,7 +1,12 @@
-.PHONY: build test test-race integration lint vet verify check cross-build clean
+INSTALL_DIR := D:/assets-library
+
+.PHONY: build install test test-race integration lint vet verify check cross-build clean
 
 build:
 	go build -trimpath -o bin/asset-library-manager ./cmd/asset-library-manager
+
+install:
+	powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/install.ps1 -InstallDir "$(INSTALL_DIR)"
 
 test:
 	go test -shuffle=on ./...
