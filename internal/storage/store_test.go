@@ -62,6 +62,36 @@ func TestStoreStagePromoteVerifyAndOpen(t *testing.T) {
 	}
 }
 
+func TestStoreSnapshotIncomingReturnsTopLevelEntryMetadata(t *testing.T) {
+	t.Parallel()
+
+	store, paths := newTestStore(t)
+	filePath := filepath.Join(paths.Incoming, "asset.PNG")
+	if err := os.WriteFile(filePath, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(paths.Incoming, "ignored"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.SnapshotIncoming(context.Background())
+	if err != nil {
+		t.Fatalf("SnapshotIncoming() error = %v", err)
+	}
+	if len(snapshot) != 2 {
+		t.Fatalf("SnapshotIncoming() returned %d entries", len(snapshot))
+	}
+	byName := make(map[string]importer.IncomingEntry, len(snapshot))
+	for _, entry := range snapshot {
+		byName[entry.Name] = entry
+	}
+	if entry := byName["asset.PNG"]; !entry.Mode.IsRegular() || entry.Size != 5 {
+		t.Fatalf("file entry = %+v", entry)
+	}
+	if entry := byName["ignored"]; !entry.Mode.IsDir() {
+		t.Fatalf("directory entry = %+v", entry)
+	}
+}
+
 func TestStoreStageLimitRemovesPartialFile(t *testing.T) {
 	t.Parallel()
 
