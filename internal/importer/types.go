@@ -188,6 +188,7 @@ func hasDrivePrefix(value string) bool {
 // SourceType describes the physical incoming source.
 type SourceType string
 
+// Supported source types, including the invalid zero value.
 const (
 	SourceTypeUnknown SourceType = ""
 	SourceTypeLoose   SourceType = "loose"
@@ -202,6 +203,7 @@ func (value SourceType) Valid() bool {
 // ItemState is the durable per-image workflow state.
 type ItemState string
 
+// Item workflow states, including the invalid zero value.
 const (
 	ItemStateUnknown    ItemState = ""
 	ItemStateDiscovered ItemState = "discovered"
@@ -252,6 +254,7 @@ func (state ItemState) CanTransitionTo(next ItemState) bool {
 // SourceState is the durable aggregate source state.
 type SourceState string
 
+// Source aggregation states, including the invalid zero value.
 const (
 	SourceStateUnknown    SourceState = ""
 	SourceStateDiscovered SourceState = "discovered"
@@ -278,6 +281,7 @@ func (state SourceState) Valid() bool {
 // DeletionState is the durable source-deletion workflow state.
 type DeletionState string
 
+// Source deletion states, including the invalid zero value.
 const (
 	DeletionStateUnknown     DeletionState = ""
 	DeletionStateNotEligible DeletionState = "not-eligible"
@@ -301,6 +305,7 @@ func (state DeletionState) Valid() bool {
 // AssetState describes filesystem/catalog consistency.
 type AssetState string
 
+// Asset persistence states, including the invalid zero value.
 const (
 	AssetStateUnknown         AssetState = ""
 	AssetStateStaged          AssetState = "staged"
@@ -316,6 +321,7 @@ func (state AssetState) Valid() bool {
 // ErrorCode is a stable machine-readable import failure classification.
 type ErrorCode string
 
+// Stable processing error codes persisted for user-safe reporting.
 const (
 	ErrorCodeSourceChanged    ErrorCode = "source_changed"
 	ErrorCodeInvalidInput     ErrorCode = "invalid_input"
