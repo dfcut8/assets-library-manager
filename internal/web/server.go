@@ -8,6 +8,8 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+
+	"github.com/dfcut8/assets-library-manager/internal/codex"
 )
 
 //go:embed templates/*.html static/*.css
@@ -15,10 +17,11 @@ var assets embed.FS
 
 // Status contains safe startup information rendered by the bootstrap catalog page.
 type Status struct {
-	APIKeyConfigured bool
-	Database         string
-	Incoming         string
-	Processed        string
+	CodexState codex.State
+	CodexPlan  string
+	Database   string
+	Incoming   string
+	Processed  string
 }
 
 // New builds the HTTP handler with strict Host validation and security headers.

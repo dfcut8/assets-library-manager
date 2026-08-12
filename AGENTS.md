@@ -2,6 +2,7 @@
 
 ## Pull requests
 
+- Use the host environment's GitHub CLI authentication by default for GitHub operations. If sandboxed `gh auth status` reports missing or invalid credentials, retry through the host environment rather than asking the user to authenticate inside the sandbox.
 - Unless the user explicitly asks otherwise, every task that changes repository files must conclude by opening a pull request for those changes. Create or switch to an appropriate branch if needed, commit only the in-scope changes, push all commits, and open the pull request ready for review.
 - When asked to open, create, or publish a pull request, create it as ready for review. Never create a draft pull request.
 - Push all committed in-scope changes before opening the pull request.

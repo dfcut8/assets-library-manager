@@ -15,15 +15,27 @@
       <p>The runnable foundation is initialized. Image importing and catalog browsing arrive in later milestones.</p>
     </header>
 
-    {{if .APIKeyConfigured}}
-    <section class="status good" aria-label="OpenAI status">
-      <strong>OpenAI configured</strong>
-      <span>An API key is present in config.json.</span>
+    {{if eq .CodexState "ready"}}
+    <section class="status good" aria-label="Codex status">
+      <strong>Codex subscription ready</strong>
+      <span>The local Codex App Server is authenticated with ChatGPT{{if .CodexPlan}} ({{.CodexPlan}} plan){{end}}.</span>
+    {{else if eq .CodexState "signed_out"}}
+    <section class="status warning" aria-label="Codex status">
+      <strong>Codex sign-in required</strong>
+      <span>Run <code>codex login</code>, sign in with ChatGPT, then restart Asset Library Manager.</span>
+    {{else if eq .CodexState "api_key"}}
+    <section class="status warning" aria-label="Codex status">
+      <strong>Codex is using an API key</strong>
+      <span>Run <code>codex logout</code> followed by <code>codex login</code> and choose ChatGPT subscription access.</span>
+    {{else if eq .CodexState "unsupported"}}
+    <section class="status warning" aria-label="Codex status">
+      <strong>Unsupported Codex account</strong>
+      <span>Asset processing requires Codex authenticated with a ChatGPT subscription.</span>
     </section>
     {{else}}
-    <section class="status warning" aria-label="OpenAI status">
-      <strong>OpenAI not configured</strong>
-      <span>Add <code>openai.api_key</code> to config.json, then restart. Existing catalog data remains available without it.</span>
+    <section class="status warning" aria-label="Codex status">
+      <strong>Codex unavailable</strong>
+      <span>Install the Codex CLI, ensure <code>codex</code> is on PATH, run <code>codex login</code>, then restart. Existing catalog data remains available.</span>
     </section>
     {{end}}
 

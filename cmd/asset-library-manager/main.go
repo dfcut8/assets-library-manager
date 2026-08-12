@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/dfcut8/assets-library-manager/internal/app"
+	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/platform"
 )
 
@@ -64,7 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	application := app.New(logger, platform.Browser{})
+	application := app.New(logger, platform.Browser{}, codex.New())
 	if err := application.Run(ctx, root); err != nil {
 		logger.Error("application stopped with an error", "error", err)
 		return 1

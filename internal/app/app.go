@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/config"
 	"github.com/dfcut8/assets-library-manager/internal/sqlite"
 	"github.com/dfcut8/assets-library-manager/internal/storage"
@@ -23,17 +24,24 @@ type URLLauncher interface {
 	Open(ctx context.Context, targetURL string) error
 }
 
+// CodexChecker verifies that subscription-backed processing is available.
+type CodexChecker interface {
+	Check(ctx context.Context, command string) (codex.Status, error)
+}
+
 // Application owns the process lifecycle and its injected platform boundary.
 type Application struct {
 	logger   *slog.Logger
 	launcher URLLauncher
+	codex    CodexChecker
 }
 
 // New constructs an application with explicit process-level dependencies.
-func New(logger *slog.Logger, launcher URLLauncher) *Application {
+func New(logger *slog.Logger, launcher URLLauncher, codexChecker CodexChecker) *Application {
 	return &Application{
 		logger:   logger,
 		launcher: launcher,
+		codex:    codexChecker,
 	}
 }
 
@@ -70,7 +78,17 @@ func (a *Application) Run(ctx context.Context, root string) error {
 		return err
 	}
 
-	runErr := a.serve(ctx, cfg)
+	codexCtx, cancelCodex := context.WithTimeout(
+		ctx,
+		time.Duration(cfg.Codex.StartupTimeoutSeconds)*time.Second,
+	)
+	codexStatus, codexErr := a.codex.Check(codexCtx, cfg.Codex.Command)
+	cancelCodex()
+	if codexErr != nil {
+		a.logger.Warn("codex preflight failed", "error", codexErr)
+	}
+
+	runErr := a.serve(ctx, cfg, codexStatus)
 	cleanupCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second,
@@ -82,13 +100,14 @@ func (a *Application) Run(ctx context.Context, root string) error {
 	return errors.Join(runErr, checkpointErr, closeErr)
 }
 
-func (a *Application) serve(ctx context.Context, cfg config.Config) error {
+func (a *Application) serve(ctx context.Context, cfg config.Config, codexStatus codex.Status) error {
 	address := net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port))
 	handler, err := web.New(address, web.Status{
-		APIKeyConfigured: cfg.OpenAI.APIKey != "",
-		Database:         cfg.Storage.Database,
-		Incoming:         cfg.Storage.IncomingDirectory,
-		Processed:        cfg.Storage.ProcessedDirectory,
+		CodexState: codexStatus.State,
+		CodexPlan:  codexStatus.PlanType,
+		Database:   cfg.Storage.Database,
+		Incoming:   cfg.Storage.IncomingDirectory,
+		Processed:  cfg.Storage.ProcessedDirectory,
 	})
 	if err != nil {
 		return err
