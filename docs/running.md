@@ -186,4 +186,4 @@ From the repository root, run:
 make install
 ```
 
-This builds a CGO-free Windows/amd64 executable and copies it to `D:\assets-library\asset-library-manager.exe`. The target always refreshes `config.example.json` in that directory. It creates `config.json` from the example only when `config.json` does not already exist, preserving local settings on later installs.
+This builds an optimized, CGO-free Windows/amd64 executable, strips linker symbol and DWARF tables, embeds the Git-derived version and commit, and copies it to `D:\assets-library\asset-library-manager.exe`. The target always refreshes `config.example.json` in that directory. It creates `config.json` from the example only when `config.json` does not already exist, preserving local settings on later installs.

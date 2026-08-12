@@ -15,10 +15,20 @@ New-Item -ItemType Directory -Force -Path $buildDirectory | Out-Null
 
 Push-Location $repositoryRoot
 try {
+    $version = (& git describe --tags --always --dirty).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "git describe failed with exit code $LASTEXITCODE"
+    }
+    $commit = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "git rev-parse failed with exit code $LASTEXITCODE"
+    }
+
     $env:CGO_ENABLED = '0'
     $env:GOOS = 'windows'
     $env:GOARCH = 'amd64'
-    & go build -trimpath -o $builtBinary ./cmd/asset-library-manager
+    $linkerFlags = "-s -w -X main.version=$version -X main.commit=$commit"
+    & go build -trimpath -ldflags $linkerFlags -o $builtBinary ./cmd/asset-library-manager
     if ($LASTEXITCODE -ne 0) {
         throw "go build failed with exit code $LASTEXITCODE"
     }
