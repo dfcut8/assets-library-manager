@@ -22,7 +22,8 @@ var migrationFiles embed.FS
 
 // Database wraps the process-owned database connection pool.
 type Database struct {
-	db *sql.DB
+	db        *sql.DB
+	writeGate chan struct{}
 }
 
 // Open creates or opens, migrates, and verifies a database before returning it.
@@ -75,7 +76,10 @@ func Open(ctx context.Context, path string) (*Database, error) {
 		return closeOnError(err)
 	}
 
-	return &Database{db: db}, nil
+	writeGate := make(chan struct{}, 1)
+	writeGate <- struct{}{}
+
+	return &Database{db: db, writeGate: writeGate}, nil
 }
 
 func preflightExisting(ctx context.Context, path string) error {
