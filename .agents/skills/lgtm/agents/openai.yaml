@@ -1,0 +1,7 @@
+interface:
+  display_name: "LGTM"
+  short_description: "Merge the active PR and delete its branch"
+  default_prompt: "Use $lgtm to merge the active pull request and delete its branch."
+
+policy:
+  allow_implicit_invocation: false
