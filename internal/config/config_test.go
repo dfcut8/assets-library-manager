@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
+	"reflect"
 	"testing"
 )
 
@@ -25,54 +25,67 @@ func TestDefaultMatchesExampleConfig(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreateGeneratesDefaultsAndIgnoresEnvironment(t *testing.T) {
+func TestLoadUsesDefaultsWithoutCreatingConfig(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "must-not-be-used")
 	root := t.TempDir()
 
-	cfg, created, err := LoadOrCreate(root)
+	cfg, err := Load(root)
 	if err != nil {
-		t.Fatalf("LoadOrCreate() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
-	if !created {
-		t.Fatal("LoadOrCreate() created = false, want true")
+	if !reflect.DeepEqual(cfg, Default()) {
+		t.Fatalf("Load() = %#v, want compiled defaults", cfg)
 	}
-	if cfg.Codex.Command != "codex" {
-		t.Fatalf("Codex command = %q, want codex", cfg.Codex.Command)
-	}
-	if !cfg.Server.OpenBrowser {
-		t.Fatal("OpenBrowser = false, want true")
-	}
-
-	path := filepath.Join(root, FileName)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(config.json) error = %v", err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		t.Fatalf("config mode = %o, want 600", info.Mode().Perm())
+	if _, err := os.Stat(filepath.Join(root, FileName)); !os.IsNotExist(err) {
+		t.Fatalf("missing config was created: %v", err)
 	}
 }
 
-func TestLoadOrCreatePreservesExistingConfig(t *testing.T) {
+func TestLoadAppliesPartialOverridesAndPreservesExistingConfig(t *testing.T) {
 	root := t.TempDir()
-	want := Default()
-	want.Server.Port = 8123
-	want.Codex.Command = "custom-codex"
-	writeConfig(t, root, want)
+	path := filepath.Join(root, FileName)
+	overrides := []byte(`{
+  "server": {
+    "port": 8123,
+    "open_browser": false
+  },
+  "processing": {
+    "workers": 4,
+    "archive": {
+      "max_entries": 500
+    }
+  },
+  "codex": {
+    "command": "custom-codex"
+  }
+}`)
+	if err := os.WriteFile(path, overrides, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	original, err := os.ReadFile(filepath.Join(root, FileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, created, err := LoadOrCreate(root)
+	got, err := Load(root)
 	if err != nil {
-		t.Fatalf("LoadOrCreate() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
-	if created {
-		t.Fatal("LoadOrCreate() created = true, want false")
+	if got.Server.Port != 8123 || got.Server.OpenBrowser {
+		t.Fatalf("server overrides = %#v", got.Server)
 	}
-	if got.Server.Port != want.Server.Port || got.Codex.Command != want.Codex.Command {
-		t.Fatalf("LoadOrCreate() = %#v, want preserved values", got)
+	if got.Processing.Workers != 4 || got.Processing.Archive.MaxEntries != 500 {
+		t.Fatalf("processing overrides = %#v", got.Processing)
+	}
+	if got.Codex.Command != "custom-codex" {
+		t.Fatalf("codex command = %q, want custom-codex", got.Codex.Command)
+	}
+	defaults := Default()
+	if got.Server.Host != defaults.Server.Host ||
+		got.Processing.ThumbnailMaxDimension != defaults.Processing.ThumbnailMaxDimension ||
+		got.Processing.Archive.MaxEntryBytes != defaults.Processing.Archive.MaxEntryBytes ||
+		got.Codex.Model != defaults.Codex.Model {
+		t.Fatalf("unspecified defaults were not preserved: %#v", got)
 	}
 	after, err := os.ReadFile(filepath.Join(root, FileName))
 	if err != nil {
@@ -103,20 +116,9 @@ func TestLoadRejectsInvalidJSONAndPaths(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, FileName), []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := LoadOrCreate(root); err == nil {
-				t.Fatal("LoadOrCreate() error = nil, want validation error")
+			if _, err := Load(root); err == nil {
+				t.Fatal("Load() error = nil, want validation error")
 			}
 		})
-	}
-}
-
-func writeConfig(t *testing.T, root string, cfg Config) {
-	t.Helper()
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, FileName), append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

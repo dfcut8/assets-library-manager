@@ -61,12 +61,9 @@ func ExecutableRoot() (string, error) {
 
 // Run initializes runtime state and serves until cancellation or a server failure.
 func (a *Application) Run(ctx context.Context, root string) error {
-	cfg, wasCreated, err := config.LoadOrCreate(root)
+	cfg, err := config.Load(root)
 	if err != nil {
 		return err
-	}
-	if wasCreated {
-		a.logger.Info("created default configuration", "file", config.FileName)
 	}
 
 	paths, err := storage.Prepare(root, cfg.Storage)

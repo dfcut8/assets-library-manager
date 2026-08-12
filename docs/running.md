@@ -57,11 +57,11 @@ chmod 700 "$HOME/Applications/asset-library-manager/asset-library-manager"
 "$HOME/Applications/asset-library-manager/asset-library-manager"
 ```
 
-If `config.json` is absent, the application publishes a default file atomically and continues. Review that file after the first run.
+If `config.json` is absent, the application uses its complete compiled defaults and does not create the file.
 
 ## Binary-plus-config setup
 
-Copy `config.example.json` beside the executable as `config.json`, edit it, and start the executable. JSON parsing is strict: unknown or duplicate fields, trailing values, unsafe paths, and invalid limits stop startup without overwriting the file.
+Copy `config.example.json` beside the executable as `config.json`, edit it, and start the executable. Every object and field is optional: supplied values override compiled defaults, while omitted values retain them. JSON parsing is strict: unknown or duplicate fields, trailing values, unsafe paths, and invalid limits stop startup without overwriting the file.
 
 The important settings are:
 
@@ -100,12 +100,11 @@ Every non-ready outcome blocks only new AI processing. The HTTP server, existing
 
 ## Generated artifacts and startup behavior
 
-A successful first start produces:
+A successful first start without configuration overrides produces:
 
 ```text
 <application-directory>/
   asset-library-manager[.exe]
-  config.json
   assets.db
   assets.db-shm          # may exist while running
   assets.db-wal          # may exist while running
@@ -186,4 +185,4 @@ From the repository root, run:
 make install
 ```
 
-This builds an optimized, CGO-free Windows/amd64 executable, strips linker symbol and DWARF tables, embeds the Git-derived version and commit, and copies it to `D:\assets-library\asset-library-manager.exe`. The target always refreshes `config.example.json` in that directory. It creates `config.json` from the example only when `config.json` does not already exist, preserving local settings on later installs.
+This builds an optimized, CGO-free Windows/amd64 executable, strips linker symbol and DWARF tables, embeds the Git-derived version and commit, and copies only the binary to `D:\assets-library\asset-library-manager.exe`. The target never creates, copies, or overwrites configuration, preserving any local `config.json` on later installs.
