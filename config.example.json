@@ -1,0 +1,36 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 7342,
+    "open_browser": true,
+    "shutdown_timeout_seconds": 15
+  },
+  "storage": {
+    "database": "assets.db",
+    "incoming_directory": "incoming",
+    "processed_directory": "processed"
+  },
+  "processing": {
+    "workers": 2,
+    "thumbnail_max_dimension": 320,
+    "analysis_max_dimension": 1536,
+    "max_analysis_bytes": 20971520,
+    "max_source_bytes": 536870912,
+    "max_image_pixels": 100000000,
+    "archive": {
+      "max_entries": 2000,
+      "max_entry_bytes": 268435456,
+      "max_total_uncompressed_bytes": 1073741824,
+      "max_compression_ratio": 200
+    }
+  },
+  "openai": {
+    "api_key": "",
+    "model": "gpt-5.6-terra",
+    "reasoning_effort": "medium",
+    "image_detail": "auto",
+    "timeout_seconds": 90,
+    "max_attempts": 3,
+    "initial_retry_delay_ms": 1000
+  }
+}
