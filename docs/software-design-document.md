@@ -313,7 +313,7 @@ Repository errors must expose not-found and conflict semantics through `errors.I
 - `server.port` must be between 1 and 65535.
 - `server.open_browser` defaults to `true` and controls only the non-fatal post-start browser launch.
 - `server.shutdown_timeout_seconds` must be positive and is capped by a hard implementation ceiling.
-- Storage paths must be non-empty, relative, normalized paths contained by the application root.
+- Storage paths must be non-empty, relative, normalized paths contained by the application root. They use `/` as the platform-independent separator; backslashes are rejected so traversal checks have identical semantics on Windows, macOS, and Linux.
 - Storage paths must not overlap or resolve through symlinks outside the application root.
 - Worker and size limits must be positive and within implementation-defined hard safety ceilings.
 - `thumbnail_max_dimension` defaults to and must not exceed 320 in v1.

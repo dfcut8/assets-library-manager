@@ -71,11 +71,14 @@ func TestLoadOrCreatePreservesExistingConfig(t *testing.T) {
 
 func TestLoadRejectsInvalidJSONAndPaths(t *testing.T) {
 	tests := map[string]string{
-		"unknown field":  `{"unexpected":true}`,
-		"duplicate key":  `{"server":{"port":7342,"port":8123}}`,
-		"trailing value": `{} {}`,
-		"non-loopback":   `{"server":{"host":"0.0.0.0"}}`,
-		"escaping path":  `{"storage":{"processed_directory":"..\\outside"}}`,
+		"unknown field":              `{"unexpected":true}`,
+		"duplicate key":              `{"server":{"port":7342,"port":8123}}`,
+		"trailing value":             `{} {}`,
+		"non-loopback":               `{"server":{"host":"0.0.0.0"}}`,
+		"unix path traversal":        `{"storage":{"processed_directory":"../outside"}}`,
+		"windows path traversal":     `{"storage":{"processed_directory":"..\\outside"}}`,
+		"windows drive path":         `{"storage":{"processed_directory":"C:/outside"}}`,
+		"windows network share path": `{"storage":{"processed_directory":"//server/share"}}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {

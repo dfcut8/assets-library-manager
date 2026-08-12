@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -297,18 +298,35 @@ func validateStorage(cfg StorageConfig) error {
 	return nil
 }
 
-func validateRelativePath(name, path string) error {
-	if path == "" || path == "." {
+func validateRelativePath(name, pathValue string) error {
+	if pathValue == "" || pathValue == "." {
 		return fmt.Errorf("%s must be a non-empty relative path", name)
 	}
-	if !filepath.IsLocal(path) || filepath.IsAbs(path) {
+	// Configuration paths use forward slashes on every supported platform. This
+	// keeps validation independent of the host OS and prevents a Windows path
+	// such as `..\outside` from being treated as a harmless filename on Unix.
+	if strings.ContainsRune(pathValue, '\\') {
+		return fmt.Errorf("%s must use forward slashes", name)
+	}
+	if !filepath.IsLocal(pathValue) || filepath.IsAbs(pathValue) ||
+		pathpkg.IsAbs(pathValue) || hasWindowsDrivePrefix(pathValue) {
 		return fmt.Errorf("%s must remain inside the application root", name)
 	}
-	if filepath.Clean(path) != path {
+	if filepath.Clean(pathValue) != pathValue || pathpkg.Clean(pathValue) != pathValue {
 		return fmt.Errorf("%s must be normalized", name)
 	}
 
 	return nil
+}
+
+func hasWindowsDrivePrefix(pathValue string) bool {
+	if len(pathValue) < 2 || pathValue[1] != ':' {
+		return false
+	}
+
+	first := pathValue[0]
+
+	return first >= 'A' && first <= 'Z' || first >= 'a' && first <= 'z'
 }
 
 func pathsOverlap(left, right string) bool {

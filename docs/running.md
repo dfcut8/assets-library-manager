@@ -43,7 +43,7 @@ The important settings are:
 - `server.host`: must be an IPv4 or IPv6 loopback address.
 - `server.port`: the local HTTP port; default `7342`.
 - `server.open_browser`: opens the local URL after successful initialization; default `true`. A launch failure is logged but does not stop the server.
-- `storage.*`: normalized paths beneath the executable directory.
+- `storage.*`: normalized paths beneath the executable directory. Use `/` as the separator on every platform (for example, `data/assets.db`, including on Windows).
 - `openai.api_key`: the only supported OpenAI API-key source. `OPENAI_API_KEY` is ignored.
 
 Because `config.json` contains a credential, do not commit it, share it, or include it in diagnostics. Restrict access to the application directory using operating-system permissions. The application redacts the key from structured configuration logs and never sends it to the browser or stores it in SQLite.
