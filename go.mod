@@ -4,7 +4,10 @@ go 1.26.0
 
 toolchain go1.26.5
 
-require modernc.org/sqlite v1.56.0
+require (
+	golang.org/x/image v0.45.0
+	modernc.org/sqlite v1.56.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

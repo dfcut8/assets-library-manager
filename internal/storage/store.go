@@ -32,6 +32,29 @@ type StagedFile struct {
 	Size   int64
 }
 
+// SnapshotIncoming returns top-level entry metadata without following symbolic links.
+func (s *Store) SnapshotIncoming(ctx context.Context) ([]importer.IncomingEntry, error) {
+	entries, err := fs.ReadDir(s.incoming.FS(), ".")
+	if err != nil {
+		return nil, fmt.Errorf("reading incoming root: %w", err)
+	}
+	snapshot := make([]importer.IncomingEntry, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("snapshotting incoming root: %w", err)
+		}
+		info, err := s.incoming.Lstat(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("stating incoming entry: %w", err)
+		}
+		snapshot = append(snapshot, importer.IncomingEntry{
+			Name: entry.Name(), Mode: info.Mode(), Size: info.Size(), ModTime: info.ModTime(),
+		})
+	}
+
+	return snapshot, nil
+}
+
 // OpenStore opens the prepared runtime roots. The caller owns the returned Store.
 func OpenStore(paths Paths) (*Store, error) {
 	incoming, err := os.OpenRoot(paths.Incoming)
