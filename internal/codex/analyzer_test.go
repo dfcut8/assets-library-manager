@@ -73,12 +73,8 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	var params struct {
 		ApprovalPolicy string `json:"approvalPolicy"`
 		SandboxPolicy  struct {
-			Type   string `json:"type"`
-			Access struct {
-				Type                    string   `json:"type"`
-				IncludePlatformDefaults bool     `json:"includePlatformDefaults"`
-				ReadableRoots           []string `json:"readableRoots"`
-			} `json:"access"`
+			Type          string `json:"type"`
+			NetworkAccess bool   `json:"networkAccess"`
 		} `json:"sandboxPolicy"`
 		OutputSchema map[string]any `json:"outputSchema"`
 		Input        []struct {
@@ -91,9 +87,16 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 		t.Fatalf("decoding turn params: %v", err)
 	}
 	if params.ApprovalPolicy != "never" || params.SandboxPolicy.Type != "readOnly" ||
-		params.SandboxPolicy.Access.Type != "restricted" || params.SandboxPolicy.Access.IncludePlatformDefaults ||
-		len(params.SandboxPolicy.Access.ReadableRoots) != 1 {
+		params.SandboxPolicy.NetworkAccess {
 		t.Fatalf("turn sandbox params = %#v", params)
+	}
+	var rawParams map[string]any
+	if err := json.Unmarshal(turn.Params, &rawParams); err != nil {
+		t.Fatalf("decoding raw turn params: %v", err)
+	}
+	sandboxPolicy := rawParams["sandboxPolicy"].(map[string]any)
+	if _, ok := sandboxPolicy["access"]; ok {
+		t.Fatalf("turn sandbox policy contains removed access field: %#v", sandboxPolicy)
 	}
 	if params.OutputSchema["additionalProperties"] != false || len(params.Input) != 2 ||
 		params.Input[1].Type != "localImage" || params.Input[1].Path == "" {

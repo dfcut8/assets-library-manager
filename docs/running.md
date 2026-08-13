@@ -94,7 +94,7 @@ The status page reports one of these outcomes:
 | Codex sign-in required | Run `codex login`, complete ChatGPT login, and restart the application. |
 | Codex is using an API key | Run `codex logout`, then `codex login` and choose ChatGPT subscription access. |
 | Unsupported Codex account | Switch Codex to a ChatGPT account. |
-| Codex unavailable | Install/update Codex, fix `codex.command` or `PATH`, and restart. Inspect the `codex preflight failed` structured log for bounded technical details. |
+| Codex unavailable | Install/update Codex, fix `codex.command` or `PATH`, and restart. Inspect the `codex preflight failed` console log for bounded technical details. |
 
 Every non-ready outcome blocks only new AI processing. The HTTP server, existing catalog, and recovery-safe local state still start.
 

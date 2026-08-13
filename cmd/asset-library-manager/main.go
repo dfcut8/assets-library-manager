@@ -56,7 +56,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	logger := newLogger(stderr)
 	root, err := app.ExecutableRoot()
 	if err != nil {
 		logger.Error("startup failed", "error", err)
@@ -72,4 +72,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+func newLogger(output io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(output, nil))
 }
