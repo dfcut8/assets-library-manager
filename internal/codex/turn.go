@@ -48,7 +48,6 @@ func (analyzer *Analyzer) analyzeOnce(
 	ctx context.Context,
 	input ImageInput,
 	localImagePath string,
-	scratchPath string,
 ) (
 	result AnalysisResult,
 	normalizedJSON string,
@@ -59,7 +58,7 @@ func (analyzer *Analyzer) analyzeOnce(
 	var threadResponse threadStartResult
 	if err := analyzer.client.request(ctx, "thread/start", map[string]any{
 		"model":          analyzer.config.Model,
-		"cwd":            scratchPath,
+		"cwd":            analyzer.config.WorkingDirectory,
 		"approvalPolicy": "never",
 		"sandbox":        "read-only",
 		"ephemeral":      true,
@@ -99,7 +98,7 @@ func (analyzer *Analyzer) analyzeOnce(
 		"model":          analyzer.config.Model,
 		"effort":         analyzer.config.ReasoningEffort,
 		"approvalPolicy": "never",
-		"cwd":            scratchPath,
+		"cwd":            analyzer.config.WorkingDirectory,
 		"sandboxPolicy": map[string]any{
 			"type":          "readOnly",
 			"networkAccess": false,

@@ -27,6 +27,7 @@ const (
 type AnalyzerConfig struct {
 	Command           string
 	Model             string
+	WorkingDirectory  string
 	ReasoningEffort   string
 	TurnTimeout       time.Duration
 	MaxAttempts       int
@@ -113,6 +114,11 @@ func startAnalyzer(
 	if recorder == nil {
 		return nil, newAnalysisError(ErrorConfiguration, "AI attempt persistence is unavailable", false, nil)
 	}
+	workingDirectory, err := validateWorkingDirectory(config.WorkingDirectory)
+	if err != nil {
+		return nil, err
+	}
+	config.WorkingDirectory = workingDirectory
 	client, err := startTransport(ctx, config.Command, start)
 	if err != nil {
 		return nil, classifyTransportError(err)
@@ -159,7 +165,7 @@ func (analyzer *Analyzer) Analyze(
 	if err := ctx.Err(); err != nil {
 		return AnalysisResult{}, AnalysisProvenance{}, classifyTransportError(err)
 	}
-	localImagePath, scratchPath, err := validateImageInput(input)
+	localImagePath, _, err := validateImageInput(input)
 	if err != nil {
 		return AnalysisResult{}, AnalysisProvenance{}, err
 	}
@@ -195,7 +201,7 @@ func (analyzer *Analyzer) Analyze(
 			AttemptNumber: attempt, StartedAt: startedAt, Outcome: "pending",
 		}
 		result, normalizedJSON, usageJSON, requestID, attemptErr := analyzer.analyzeOnce(
-			ctx, input, localImagePath, scratchPath,
+			ctx, input, localImagePath,
 		)
 		completedAt := analyzer.now().UTC()
 		run.CompletedAt = &completedAt
@@ -245,12 +251,36 @@ func (analyzer *Analyzer) Analyze(
 
 func validateAnalyzerConfig(config AnalyzerConfig) error {
 	if strings.TrimSpace(config.Command) == "" || strings.TrimSpace(config.Model) == "" ||
+		strings.TrimSpace(config.WorkingDirectory) == "" ||
 		strings.TrimSpace(config.ReasoningEffort) == "" || config.TurnTimeout <= 0 ||
 		config.MaxAttempts < 1 || config.MaxAttempts > 10 || config.InitialRetryDelay <= 0 {
 		return newAnalysisError(ErrorConfiguration, "Codex analyzer configuration is invalid", false, nil)
 	}
 
 	return nil
+}
+
+func validateWorkingDirectory(directory string) (string, error) {
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", newAnalysisError(
+			ErrorConfiguration, "Codex analysis workspace is invalid", false, err,
+		)
+	}
+	resolved, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return "", newAnalysisError(
+			ErrorConfiguration, "Codex analysis workspace is invalid", false, err,
+		)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", newAnalysisError(
+			ErrorConfiguration, "Codex analysis workspace is invalid", false, err,
+		)
+	}
+
+	return resolved, nil
 }
 
 func validateImageInput(input ImageInput) (string, string, error) {

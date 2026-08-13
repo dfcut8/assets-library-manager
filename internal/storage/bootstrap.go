@@ -22,11 +22,12 @@ func (*DatabaseRecoveryError) Error() string {
 
 // Paths contains canonical runtime locations beneath the application root.
 type Paths struct {
-	Root      string
-	Database  string
-	Incoming  string
-	Processed string
-	Staging   string
+	Root              string
+	Database          string
+	Incoming          string
+	Processed         string
+	Staging           string
+	AnalysisWorkspace string
 }
 
 // Prepare validates recovery preconditions before creating missing directories.
@@ -46,6 +47,9 @@ func Prepare(root string, cfg config.StorageConfig) (Paths, error) {
 		Incoming:  filepath.Join(rootPath, cfg.IncomingDirectory),
 		Processed: filepath.Join(rootPath, cfg.ProcessedDirectory),
 		Staging:   filepath.Join(rootPath, cfg.ProcessedDirectory, ".staging"),
+		AnalysisWorkspace: filepath.Join(
+			rootPath, cfg.ProcessedDirectory, ".staging", ".codex-analysis",
+		),
 	}
 
 	isMissing, err := databaseMissing(paths.Database)
@@ -67,6 +71,7 @@ func Prepare(root string, cfg config.StorageConfig) (Paths, error) {
 		paths.Incoming,
 		paths.Processed,
 		paths.Staging,
+		paths.AnalysisWorkspace,
 	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return Paths{}, fmt.Errorf("creating runtime directory: %w", err)
@@ -78,6 +83,7 @@ func Prepare(root string, cfg config.StorageConfig) (Paths, error) {
 		paths.Incoming,
 		paths.Processed,
 		paths.Staging,
+		paths.AnalysisWorkspace,
 	} {
 		if err := verifyContainedDirectory(rootPath, path); err != nil {
 			return Paths{}, err

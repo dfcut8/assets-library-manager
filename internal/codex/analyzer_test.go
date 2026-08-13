@@ -68,6 +68,14 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	if !threadParams.Ephemeral || threadParams.ApprovalPolicy != "never" || threadParams.Sandbox != "read-only" {
 		t.Fatalf("thread params = %#v", threadParams)
 	}
+	var rawThreadParams map[string]any
+	if err := json.Unmarshal(thread.Params, &rawThreadParams); err != nil {
+		t.Fatalf("decoding raw thread params: %v", err)
+	}
+	if rawThreadParams["cwd"] != analyzer.config.WorkingDirectory ||
+		rawThreadParams["cwd"] == input.ScratchDirectory {
+		t.Fatalf("thread cwd = %v", rawThreadParams["cwd"])
+	}
 
 	turn := trace.first(t, "turn/start")
 	var params struct {
@@ -101,6 +109,10 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	if params.OutputSchema["additionalProperties"] != false || len(params.Input) != 2 ||
 		params.Input[1].Type != "localImage" || params.Input[1].Path == "" {
 		t.Fatalf("turn input/schema params = %#v", params)
+	}
+	if rawParams["cwd"] != analyzer.config.WorkingDirectory ||
+		rawParams["cwd"] == input.ScratchDirectory {
+		t.Fatalf("turn cwd = %v", rawParams["cwd"])
 	}
 	if strings.Contains(params.Input[0].Text, params.Input[1].Path) {
 		t.Fatal("prompt contains the local image path")
@@ -275,6 +287,27 @@ func TestStartAnalyzer_RejectsIncompatiblePreflight(t *testing.T) {
 				t.Fatalf("startAnalyzer() error = %#v, want kind %q", err, tt.kind)
 			}
 		})
+	}
+}
+
+func TestStartAnalyzer_RejectsInvalidWorkingDirectoryBeforeStartingProcess(t *testing.T) {
+	config := testAnalyzerConfig()
+	config.WorkingDirectory = filepath.Join(t.TempDir(), "missing")
+	started := false
+	_, err := startAnalyzer(
+		t.Context(), config, &recordingAttempts{},
+		func(context.Context, string) (*process, error) {
+			started = true
+
+			return nil, errors.New("unexpected process start")
+		},
+	)
+	var classified *AnalysisError
+	if !errors.As(err, &classified) || classified.Kind != ErrorConfiguration {
+		t.Fatalf("startAnalyzer() error = %#v", err)
+	}
+	if started {
+		t.Fatal("Codex process started with an invalid analysis workspace")
 	}
 }
 
@@ -524,7 +557,8 @@ func modelResult(modalities []string, effort string) map[string]any {
 func testAnalyzerConfig() AnalyzerConfig {
 	return AnalyzerConfig{
 		Command: "codex-test", Model: "gpt-test", ReasoningEffort: "medium",
-		TurnTimeout: time.Second, MaxAttempts: 2, InitialRetryDelay: time.Nanosecond,
+		WorkingDirectory: os.TempDir(),
+		TurnTimeout:      time.Second, MaxAttempts: 2, InitialRetryDelay: time.Nanosecond,
 	}
 }
 

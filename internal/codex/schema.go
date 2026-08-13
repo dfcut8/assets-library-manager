@@ -301,7 +301,7 @@ func outputSchema() map[string]any {
 	}
 	tagArray := func() map[string]any {
 		return map[string]any{
-			"type": "array", "maxItems": 64, "uniqueItems": true,
+			"type": "array", "maxItems": 64,
 			"items": map[string]any{
 				"type": "string", "minLength": 1, "maxLength": 64,
 				"pattern": `^[a-z0-9]+(?:-[a-z0-9]+)*$`,
