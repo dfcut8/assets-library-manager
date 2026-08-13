@@ -78,10 +78,10 @@ The important settings are:
 
 ## Codex protocol diagnostics
 
-Failed analysis attempts always log the bounded App Server method, RPC code/message, or metadata-validation cause when available. To trace every App Server request and its latency, set `ASSET_LIBRARY_MANAGER_LOG_LEVEL=debug` before starting the executable:
+Debug logging is enabled by default while import diagnostics are being stabilized. It includes the wrapped cause of item-processing failures and traces every App Server request and its latency. To return to the quieter normal-operation output, set `ASSET_LIBRARY_MANAGER_LOG_LEVEL=info` before starting the executable:
 
 ```powershell
-$env:ASSET_LIBRARY_MANAGER_LOG_LEVEL = 'debug'
+$env:ASSET_LIBRARY_MANAGER_LOG_LEVEL = 'info'
 .\asset-library-manager.exe
 ```
 

@@ -34,13 +34,26 @@ func TestNewLoggerUsesHumanReadableText(t *testing.T) {
 	}
 }
 
-func TestNewLoggerEnablesProtocolDiagnosticsFromEnvironment(t *testing.T) {
-	t.Setenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL", "debug")
+func TestNewLoggerEnablesProtocolDiagnosticsByDefault(t *testing.T) {
+	t.Setenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL", "")
 	var output bytes.Buffer
 	newLogger(&output).Debug("codex app server request started", "rpc_method", "turn/start")
 
 	got := output.String()
 	if !strings.Contains(got, "level=DEBUG") || !strings.Contains(got, "rpc_method=turn/start") {
 		t.Fatalf("debug log output = %q", got)
+	}
+}
+
+func TestNewLoggerCanDisableProtocolDiagnostics(t *testing.T) {
+	t.Setenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL", "info")
+	var output bytes.Buffer
+	logger := newLogger(&output)
+	logger.Debug("codex app server request started", "rpc_method", "turn/start")
+	logger.Info("local server ready")
+
+	got := output.String()
+	if strings.Contains(got, "level=DEBUG") || !strings.Contains(got, "level=INFO") {
+		t.Fatalf("log output = %q, want info without debug", got)
 	}
 }

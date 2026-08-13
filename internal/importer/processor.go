@@ -299,6 +299,15 @@ func (coordinator *Coordinator) failedResult(
 	message string,
 	cause error,
 ) itemResult {
+	coordinator.logger.Debug(
+		"import item processing failure details",
+		"source", work.sourcePath,
+		"item", work.item.ZIPEntryName,
+		"item_id", item.ID,
+		"code", code,
+		"message", message,
+		"error", cause,
+	)
 	result := itemResult{
 		sourceID: work.source.ID, path: work.sourcePath, itemName: work.item.ZIPEntryName,
 		state: ItemStateFailed, code: code, message: message,
