@@ -37,6 +37,9 @@ func TestPrepareAllowsSafeMissingDatabaseCases(t *testing.T) {
 			if _, err := os.Stat(paths.Staging); err != nil {
 				t.Fatalf("Stat(staging) error = %v", err)
 			}
+			if _, err := os.Stat(paths.AnalysisWorkspace); err != nil {
+				t.Fatalf("Stat(analysis workspace) error = %v", err)
+			}
 			if _, err := os.Stat(paths.Database); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("database was created before SQLite bootstrap: %v", err)
 			}

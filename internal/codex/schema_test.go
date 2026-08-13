@@ -73,6 +73,16 @@ func TestSafeUsageJSONAllowsOnlyBoundedNumericUsage(t *testing.T) {
 	}
 }
 
+func TestOutputSchemaDoesNotUseUnsupportedUniqueItems(t *testing.T) {
+	data, err := json.Marshal(outputSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"uniqueItems"`) {
+		t.Fatalf("output schema contains unsupported uniqueItems: %s", data)
+	}
+}
+
 func FuzzDecodeAndNormalize(f *testing.F) {
 	f.Add([]byte(validAnalysisJSON), 64, 64)
 	f.Add([]byte(`{"title":null}`), 1, 1)
