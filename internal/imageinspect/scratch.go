@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
 
 // ScratchStore owns a root containing per-item analysis directories.
@@ -49,17 +47,17 @@ func OpenScratchStore(parent string) (*ScratchStore, error) {
 // Create writes and syncs the sole analysis rendition for an item.
 func (store *ScratchStore) Create(
 	ctx context.Context,
-	itemID importer.ID,
+	itemID string,
 	rendition Rendition,
 ) (scratch ScratchFile, returnErr error) {
 	if err := ctx.Err(); err != nil {
 		return ScratchFile{}, fmt.Errorf("creating analysis scratch: %w", err)
 	}
-	if itemID.IsZero() || len(rendition.Data) == 0 ||
+	if !validScratchIdentifier(itemID) || len(rendition.Data) == 0 ||
 		(rendition.Extension != ".png" && rendition.Extension != ".jpg") {
 		return ScratchFile{}, errors.New("creating analysis scratch: rendition is invalid")
 	}
-	directory := itemID.String() + ".scratch"
+	directory := itemID + ".scratch"
 	if err := store.root.Mkdir(directory, 0o700); err != nil {
 		return ScratchFile{}, fmt.Errorf("creating item scratch directory: %w", err)
 	}
@@ -153,13 +151,28 @@ func validScratchFile(scratch ScratchFile) bool {
 		return false
 	}
 	identifier := strings.TrimSuffix(scratch.Directory, ".scratch")
-	if _, err := importer.ParseID(identifier); err != nil {
+	if !validScratchIdentifier(identifier) {
 		return false
 	}
 	wantPNG := path.Join(scratch.Directory, "analysis.png")
 	wantJPEG := path.Join(scratch.Directory, "analysis.jpg")
 
 	return scratch.RelativePath == wantPNG || scratch.RelativePath == wantJPEG
+}
+
+func validScratchIdentifier(identifier string) bool {
+	if len(identifier) != 32 {
+		return false
+	}
+	for _, character := range identifier {
+		isDigit := character >= '0' && character <= '9'
+		isLowerHex := character >= 'a' && character <= 'f'
+		if !isDigit && !isLowerHex {
+			return false
+		}
+	}
+
+	return true
 }
 
 func closeScratchFile(file *os.File) error {

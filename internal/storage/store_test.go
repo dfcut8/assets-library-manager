@@ -109,6 +109,49 @@ func TestStoreStageLimitRemovesPartialFile(t *testing.T) {
 	}
 }
 
+func TestStoreVerifiesStagedAndOwnsPrivateAnalysisScratch(t *testing.T) {
+	t.Parallel()
+
+	store, paths := newTestStore(t)
+	itemID := mustID(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	data := []byte("staged original")
+	staged, err := store.Stage(context.Background(), itemID, bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := store.VerifyStaged(context.Background(), staged.Path, staged.Digest, staged.Size)
+	if err != nil || !matches {
+		t.Fatalf("VerifyStaged() = %v, %v", matches, err)
+	}
+	scratch, err := store.CreateAnalysisScratch(itemID, ".png", []byte("bounded rendition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(scratch.Path) != scratch.Directory {
+		t.Fatalf("scratch = %+v", scratch)
+	}
+	info, err := os.Stat(scratch.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("scratch mode = %o, want no group/world access", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(scratch.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "analysis.png" {
+		t.Fatalf("scratch entries = %v", entries)
+	}
+	if err := store.RemoveAnalysisScratch(itemID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Staging, itemID.String()+".scratch")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scratch directory remains: %v", err)
+	}
+}
+
 func TestStorePromoteCollisionRequiresFullDigestMatch(t *testing.T) {
 	t.Parallel()
 

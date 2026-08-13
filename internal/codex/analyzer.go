@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dfcut8/assets-library-manager/internal/catalog"
 	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
 
@@ -34,31 +33,13 @@ type AnalyzerConfig struct {
 }
 
 // ImageInput identifies one rendition and the durable item it belongs to.
-type ImageInput struct {
-	ItemID           importer.ID
-	AssetID          importer.ID
-	Path             string
-	ScratchDirectory string
-	DisplayWidth     int
-	DisplayHeight    int
-}
+type ImageInput = importer.ImageInput
 
 // AnalysisResult is normalized semantic catalog metadata.
-type AnalysisResult struct {
-	Title       string
-	Description string
-	PrimaryType catalog.PrimaryType
-	Layout      catalog.Layout
-	Style       string
-	PixelArt    bool
-	Confidence  float64
-	Tags        []importer.Tag
-}
+type AnalysisResult = importer.AnalysisResult
 
 // AnalysisProvenance is the accepted immutable AI attempt returned for atomic asset commit.
-type AnalysisProvenance struct {
-	Run importer.AIRun
-}
+type AnalysisProvenance = importer.AnalysisProvenance
 
 // AttemptRecorder persists non-accepted attempts as they complete. The accepted attempt is
 // returned to the coordinator so it can be committed atomically with the asset.
@@ -66,13 +47,45 @@ type AttemptRecorder interface {
 	RecordAIRun(context.Context, importer.ID, importer.ID, importer.AIRun) error
 }
 
+// Runtime is the lifecycle owned analyzer contract consumed by the application.
+type Runtime interface {
+	Analyze(context.Context, ImageInput) (AnalysisResult, AnalysisProvenance, error)
+	Status() Status
+	Close() error
+}
+
+// Starter creates one production App Server runtime after the HTTP server is available.
+type Starter struct{}
+
+// NewStarter returns the production analyzer starter.
+func NewStarter() Starter { return Starter{} }
+
+// Start launches, initializes, and preflights the owned analyzer process.
+func (Starter) Start(
+	ctx context.Context,
+	config AnalyzerConfig,
+	recorder AttemptRecorder,
+) (Runtime, error) {
+	return StartAnalyzer(ctx, config, recorder)
+}
+
 // Analyzer owns one reusable Codex App Server transport.
 type Analyzer struct {
 	config   AnalyzerConfig
 	client   *transport
 	recorder AttemptRecorder
+	status   Status
 	now      func() time.Time
 	random   func() float64
+}
+
+// Status returns the authenticated ChatGPT account state established by preflight.
+func (analyzer *Analyzer) Status() Status {
+	if analyzer == nil {
+		return Status{State: StateUnavailable}
+	}
+
+	return analyzer.status
 }
 
 // StartAnalyzer starts, initializes, and preflights a reusable analyzer.

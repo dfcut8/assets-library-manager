@@ -172,7 +172,7 @@ func (d *Database) ListPendingDeletions(
 	ctx context.Context,
 ) (_ []importer.PendingDeletion, returnErr error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT id, source_path, discovery_fingerprint, deletion_state
+		SELECT id, source_path, discovery_fingerprint, state, deletion_state
 		FROM import_sources
 		WHERE deletion_state IN ('eligible', 'pending', 'failed')
 		ORDER BY source_path
@@ -188,11 +188,15 @@ func (d *Database) ListPendingDeletions(
 
 	deletions := make([]importer.PendingDeletion, 0)
 	for rows.Next() {
-		var idText, sourcePathText, fingerprintText, stateText string
-		if err := rows.Scan(&idText, &sourcePathText, &fingerprintText, &stateText); err != nil {
+		var idText, sourcePathText, fingerprintText, sourceStateText, stateText string
+		if err := rows.Scan(
+			&idText, &sourcePathText, &fingerprintText, &sourceStateText, &stateText,
+		); err != nil {
 			return nil, fmt.Errorf("scanning pending source deletion: %w", err)
 		}
-		deletion, err := decodePendingDeletion(idText, sourcePathText, fingerprintText, stateText)
+		deletion, err := decodePendingDeletion(
+			idText, sourcePathText, fingerprintText, sourceStateText, stateText,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -297,7 +301,7 @@ func decodeRecoveryAsset(
 }
 
 func decodePendingDeletion(
-	idText, sourcePathText, fingerprintText, stateText string,
+	idText, sourcePathText, fingerprintText, sourceStateText, stateText string,
 ) (importer.PendingDeletion, error) {
 	id, err := importer.ParseID(idText)
 	if err != nil {
@@ -315,6 +319,12 @@ func decodePendingDeletion(
 	if !state.Valid() {
 		return importer.PendingDeletion{}, errors.New("decoding pending deletion: invalid deletion state")
 	}
+	sourceState := importer.SourceState(sourceStateText)
+	if !sourceState.Valid() {
+		return importer.PendingDeletion{}, errors.New("decoding pending deletion: invalid source state")
+	}
 
-	return importer.PendingDeletion{ID: id, Path: sourcePath, Fingerprint: fingerprint, State: state}, nil
+	return importer.PendingDeletion{
+		ID: id, Path: sourcePath, Fingerprint: fingerprint, SourceState: sourceState, State: state,
+	}, nil
 }
