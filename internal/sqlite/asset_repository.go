@@ -278,9 +278,6 @@ func validateStagedAsset(asset importer.StagedAsset) error {
 	if asset.EncodedAnimated != (asset.EncodedFrameCount > 1) {
 		return errors.New("committing staged asset: animation metadata is inconsistent")
 	}
-	if asset.HasTransparency && !asset.HasAlpha {
-		return errors.New("committing staged asset: transparency requires an alpha channel")
-	}
 	if !json.Valid([]byte(asset.DominantColorsJSON)) {
 		return errors.New("committing staged asset: dominant colors are not valid json")
 	}

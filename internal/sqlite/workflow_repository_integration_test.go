@@ -179,8 +179,10 @@ func TestWorkflowRepositoryCommitReadyAndRecoveryQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	asset := testStagedAsset(t, item.ID, digest, now.Add(3*time.Second))
+	asset.HasAlpha = false
+	asset.HasTransparency = true
 	if err := database.CommitStagedAsset(ctx, asset); err != nil {
-		t.Fatalf("CommitStagedAsset() error = %v", err)
+		t.Fatalf("CommitStagedAsset(indexed transparency) error = %v", err)
 	}
 	if _, err := database.FindReadyByDigest(ctx, digest); !errors.Is(err, importer.ErrNotFound) {
 		t.Fatalf("FindReadyByDigest(staged) error = %v", err)
