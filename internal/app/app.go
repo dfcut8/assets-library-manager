@@ -139,7 +139,7 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 	startupCtx, cancelStartup := context.WithTimeout(
 		ctx, time.Duration(cfg.Codex.StartupTimeoutSeconds)*time.Second,
 	)
-	analyzer, analyzerErr := a.codex.Start(startupCtx, analyzerConfig(cfg), database)
+	analyzer, analyzerErr := a.codex.Start(startupCtx, analyzerConfig(cfg, a.logger), database)
 	cancelStartup()
 	if analyzerErr != nil || analyzer == nil {
 		if analyzerErr == nil {
@@ -242,13 +242,14 @@ func processingConfig(cfg config.Config) importer.CoordinatorConfig {
 	}
 }
 
-func analyzerConfig(cfg config.Config) codex.AnalyzerConfig {
+func analyzerConfig(cfg config.Config, logger *slog.Logger) codex.AnalyzerConfig {
 	return codex.AnalyzerConfig{
 		Command: cfg.Codex.Command, Model: cfg.Codex.Model,
 		ReasoningEffort:   cfg.Codex.ReasoningEffort,
 		TurnTimeout:       time.Duration(cfg.Codex.TurnTimeoutSeconds) * time.Second,
 		MaxAttempts:       cfg.Codex.MaxAttempts,
 		InitialRetryDelay: time.Duration(cfg.Codex.InitialRetryDelayMS) * time.Millisecond,
+		Logger:            logger,
 	}
 }
 

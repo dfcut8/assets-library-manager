@@ -100,7 +100,8 @@ func classifyTransportError(err error) *AnalysisError {
 		case 429:
 			return newAnalysisError(ErrorRetryable, "Codex rate limit reached", true, err)
 		default:
-			return newAnalysisError(ErrorRetryable, "Codex request failed", true, err)
+			return newAnalysisError(ErrorRetryable,
+				fmt.Sprintf("Codex App Server request failed (RPC code %d)", remote.Code), true, err)
 		}
 	}
 

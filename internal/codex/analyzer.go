@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -30,6 +31,8 @@ type AnalyzerConfig struct {
 	TurnTimeout       time.Duration
 	MaxAttempts       int
 	InitialRetryDelay time.Duration
+	// Logger receives bounded, credential-free lifecycle and attempt diagnostics.
+	Logger *slog.Logger
 }
 
 // ImageInput identifies one rendition and the durable item it belongs to.
@@ -77,6 +80,7 @@ type Analyzer struct {
 	status   Status
 	now      func() time.Time
 	random   func() float64
+	logger   *slog.Logger
 }
 
 // Status returns the authenticated ChatGPT account state established by preflight.
@@ -115,8 +119,18 @@ func startAnalyzer(
 	}
 	analyzer := &Analyzer{
 		config: config, client: client, recorder: recorder,
-		now: time.Now, random: rand.Float64,
+		now: time.Now, random: rand.Float64, logger: config.Logger,
 	}
+	if analyzer.logger == nil {
+		analyzer.logger = slog.New(slog.DiscardHandler)
+	}
+	analyzer.logger.Info("codex analyzer started",
+		"command", config.Command,
+		"model", config.Model,
+		"reasoning_effort", config.ReasoningEffort,
+		"turn_timeout", config.TurnTimeout.String(),
+		"max_attempts", config.MaxAttempts,
+	)
 	if err := analyzer.preflight(ctx); err != nil {
 		return nil, errors.Join(err, analyzer.Close())
 	}
@@ -196,6 +210,14 @@ func (analyzer *Analyzer) Analyze(
 		}
 
 		classified := asAnalysisError(attemptErr)
+		analyzer.logger.Warn("codex semantic analysis attempt failed",
+			"item_id", input.ItemID,
+			"attempt", attempt,
+			"error_kind", classified.Kind,
+			"retryable", classified.Retryable,
+			"diagnostic", classified.Message,
+			"request_id", requestID,
+		)
 		run.Outcome = outcomeFor(classified, ctx.Err())
 		run.ErrorCode = importer.ErrorCodeCodexUnavailable
 		run.ErrorMessage = classified.Error()
