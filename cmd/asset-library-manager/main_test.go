@@ -33,3 +33,14 @@ func TestNewLoggerUsesHumanReadableText(t *testing.T) {
 		t.Fatalf("log output = %q, want human-readable slog text", got)
 	}
 }
+
+func TestNewLoggerEnablesProtocolDiagnosticsFromEnvironment(t *testing.T) {
+	t.Setenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL", "debug")
+	var output bytes.Buffer
+	newLogger(&output).Debug("codex app server request started", "rpc_method", "turn/start")
+
+	got := output.String()
+	if !strings.Contains(got, "level=DEBUG") || !strings.Contains(got, "rpc_method=turn/start") {
+		t.Fatalf("debug log output = %q", got)
+	}
+}

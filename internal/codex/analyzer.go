@@ -119,7 +119,7 @@ func startAnalyzer(
 		return nil, err
 	}
 	config.WorkingDirectory = workingDirectory
-	client, err := startTransport(ctx, config.Command, start)
+	client, err := startTransport(ctx, config.Command, start, config.Logger)
 	if err != nil {
 		return nil, classifyTransportError(err)
 	}
@@ -216,14 +216,13 @@ func (analyzer *Analyzer) Analyze(
 		}
 
 		classified := asAnalysisError(attemptErr)
-		analyzer.logger.Warn("codex semantic analysis attempt failed",
-			"item_id", input.ItemID,
-			"attempt", attempt,
-			"error_kind", classified.Kind,
-			"retryable", classified.Retryable,
-			"diagnostic", classified.Message,
-			"request_id", requestID,
-		)
+		attrs := []any{
+			"item_id", input.ItemID, "attempt", attempt,
+			"error_kind", classified.Kind, "retryable", classified.Retryable,
+			"diagnostic", classified.Message, "request_id", requestID,
+		}
+		attrs = append(attrs, analysisFailureLogAttrs(classified)...)
+		analyzer.logger.Warn("codex semantic analysis attempt failed", attrs...)
 		run.Outcome = outcomeFor(classified, ctx.Err())
 		run.ErrorCode = importer.ErrorCodeCodexUnavailable
 		run.ErrorMessage = classified.Error()
@@ -247,6 +246,27 @@ func (analyzer *Analyzer) Analyze(
 	}
 
 	return AnalysisResult{}, AnalysisProvenance{}, lastErr
+}
+
+func analysisFailureLogAttrs(err *AnalysisError) []any {
+	if err == nil || err.cause == nil {
+		return nil
+	}
+	var remote *rpcError
+	if errors.As(err, &remote) {
+		attrs := []any{"rpc_code", remote.Code, "rpc_message", sanitizeDiagnostic(remote.Message)}
+		var request *rpcRequestError
+		if errors.As(err, &request) && safeRPCMethod(request.Method) {
+			attrs = append(attrs, "rpc_method", request.Method)
+		}
+
+		return attrs
+	}
+	if err.Kind == ErrorInvalidResponse {
+		return []any{"validation_cause", sanitizeDiagnostic(err.cause.Error())}
+	}
+
+	return nil
 }
 
 func validateAnalyzerConfig(config AnalyzerConfig) error {

@@ -117,8 +117,8 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	if strings.Contains(params.Input[0].Text, params.Input[1].Path) {
 		t.Fatal("prompt contains the local image path")
 	}
-	if trace.count("thread/delete") != 1 {
-		t.Fatalf("thread/delete count = %d, want 1", trace.count("thread/delete"))
+	if trace.count("thread/delete") != 0 {
+		t.Fatalf("ephemeral thread/delete count = %d, want 0", trace.count("thread/delete"))
 	}
 }
 
@@ -155,8 +155,19 @@ func TestAnalyzer_AnalyzeRetriesInvalidResponseAndPersistsFailure(t *testing.T) 
 		runs[0].NormalizedResultJSON != "" || strings.Contains(runs[0].ErrorMessage, `{"title"`) {
 		t.Fatalf("recorded runs = %#v", runs)
 	}
-	if trace.count("thread/start") != 2 || trace.count("thread/delete") != 2 {
+	if trace.count("thread/start") != 2 || trace.count("thread/delete") != 0 {
 		t.Fatalf("thread lifecycle counts = start %d delete %d", trace.count("thread/start"), trace.count("thread/delete"))
+	}
+}
+
+func TestClassifyTransportErrorIncludesRPCMethodAndMessage(t *testing.T) {
+	err := classifyTransportError(&rpcRequestError{
+		Method: "turn/start",
+		Cause:  &rpcError{Code: -32600, Message: "Invalid request"},
+	})
+	if !strings.Contains(err.Message, "method turn/start") ||
+		!strings.Contains(err.Message, "message Invalid request") {
+		t.Fatalf("diagnostic = %q", err.Message)
 	}
 }
 
@@ -217,7 +228,7 @@ func TestAnalyzer_AnalyzeTimesOutInterruptsAndRecordsCancellation(t *testing.T) 
 	if len(runs) != 1 || runs[0].Outcome != "canceled" {
 		t.Fatalf("recorded runs = %#v", runs)
 	}
-	if trace.count("turn/interrupt") != 1 || trace.count("thread/delete") != 1 {
+	if trace.count("turn/interrupt") != 1 || trace.count("thread/delete") != 0 {
 		t.Fatalf("cleanup counts = interrupt %d delete %d", trace.count("turn/interrupt"), trace.count("thread/delete"))
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/dfcut8/assets-library-manager/internal/app"
@@ -75,5 +76,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func newLogger(output io.Writer) *slog.Logger {
-	return slog.New(slog.NewTextHandler(output, nil))
+	level := slog.LevelInfo
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL")), "debug") {
+		level = slog.LevelDebug
+	}
+
+	return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level}))
 }

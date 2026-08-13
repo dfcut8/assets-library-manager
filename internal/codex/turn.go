@@ -72,17 +72,17 @@ func (analyzer *Analyzer) analyzeOnce(
 	}
 	var turnID string
 	defer func() {
+		if ctx.Err() == nil || turnID == "" {
+			return
+		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
-		if ctx.Err() != nil && turnID != "" {
-			_ = analyzer.client.request(cleanupCtx, "turn/interrupt", map[string]string{
-				"threadId": threadID, "turnId": turnID,
-			}, nil)
-		}
-		if err := analyzer.client.request(
-			cleanupCtx, "thread/delete", map[string]string{"threadId": threadID}, nil,
-		); err != nil && returnErr == nil {
-			returnErr = classifyTransportError(err)
+		if err := analyzer.client.request(cleanupCtx, "turn/interrupt", map[string]string{
+			"threadId": threadID, "turnId": turnID,
+		}, nil); err != nil {
+			analyzer.logger.Debug("codex turn interrupt failed",
+				"request_id", safeRequestIdentifier(threadID, turnID), "error", err,
+			)
 		}
 	}()
 

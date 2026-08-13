@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -33,8 +35,23 @@ type rpcError struct {
 }
 
 func (e *rpcError) Error() string {
+	if message := sanitizeDiagnostic(e.Message); message != "" {
+		return fmt.Sprintf("app server error %d: %s", e.Code, message)
+	}
+
 	return fmt.Sprintf("app server error %d", e.Code)
 }
+
+type rpcRequestError struct {
+	Method string
+	Cause  error
+}
+
+func (err *rpcRequestError) Error() string {
+	return fmt.Sprintf("app server %s request: %v", err.Method, err.Cause)
+}
+
+func (err *rpcRequestError) Unwrap() error { return err.Cause }
 
 type wireMessage struct {
 	ID     *int64          `json:"id"`
@@ -87,9 +104,18 @@ type transport struct {
 	closing   atomic.Bool
 	closeOnce sync.Once
 	closeErr  error
+	logger    *slog.Logger
 }
 
-func startTransport(ctx context.Context, command string, start startFunc) (*transport, error) {
+func startTransport(
+	ctx context.Context,
+	command string,
+	start startFunc,
+	logger *slog.Logger,
+) (*transport, error) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	processCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	proc, err := start(processCtx, command)
 	if err != nil {
@@ -102,6 +128,7 @@ func startTransport(ctx context.Context, command string, start startFunc) (*tran
 		pending: make(map[int64]chan wireMessage),
 		events:  make(map[*eventCollector]string),
 		done:    make(chan struct{}),
+		logger:  logger,
 	}
 	client.nextID.Store(0)
 	go client.readLoop()
@@ -145,15 +172,28 @@ func (client *transport) request(ctx context.Context, method string, params any,
 	client.pending[id] = responseChannel
 	client.pendingMu.Unlock()
 	defer client.removePending(id)
+	startedAt := time.Now()
+	client.logger.Debug("codex app server request started", "rpc_method", method, "rpc_id", id)
 
 	if err := client.write(map[string]any{"method": method, "id": id, "params": params}); err != nil {
+		client.logger.Debug("codex app server request write failed",
+			"rpc_method", method, "rpc_id", id, "latency", time.Since(startedAt), "error", err,
+		)
 		return err
 	}
 	select {
 	case message := <-responseChannel:
 		if message.Error != nil {
-			return message.Error
+			client.logger.Debug("codex app server request rejected",
+				"rpc_method", method, "rpc_id", id, "latency", time.Since(startedAt),
+				"rpc_code", message.Error.Code,
+				"rpc_message", sanitizeDiagnostic(message.Error.Message),
+			)
+			return &rpcRequestError{Method: method, Cause: message.Error}
 		}
+		client.logger.Debug("codex app server request completed",
+			"rpc_method", method, "rpc_id", id, "latency", time.Since(startedAt),
+		)
 		if len(message.Result) == 0 {
 			return errors.New("app server response has no result")
 		}
@@ -166,8 +206,14 @@ func (client *transport) request(ctx context.Context, method string, params any,
 
 		return nil
 	case <-ctx.Done():
+		client.logger.Debug("codex app server request context ended",
+			"rpc_method", method, "rpc_id", id, "latency", time.Since(startedAt), "error", ctx.Err(),
+		)
 		return ctx.Err()
 	case <-client.done:
+		client.logger.Debug("codex app server transport ended during request",
+			"rpc_method", method, "rpc_id", id, "latency", time.Since(startedAt),
+		)
 		return client.transportError()
 	}
 }

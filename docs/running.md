@@ -76,6 +76,17 @@ The important settings are:
 
 `config.json` contains no OpenAI credential. Keep it out of source control because it still describes local paths and runtime policy. `OPENAI_API_KEY` is ignored.
 
+## Codex protocol diagnostics
+
+Failed analysis attempts always log the bounded App Server method, RPC code/message, or metadata-validation cause when available. To trace every App Server request and its latency, set `ASSET_LIBRARY_MANAGER_LOG_LEVEL=debug` before starting the executable:
+
+```powershell
+$env:ASSET_LIBRARY_MANAGER_LOG_LEVEL = 'debug'
+.\asset-library-manager.exe
+```
+
+Debug logs include protocol method names, numeric request IDs, durations, and bounded server error messages. They do not include prompts, image bytes, output metadata, credentials, or complete request/response payloads.
+
 ## Startup preflight and status
 
 After configuration, storage, and SQLite initialize, Asset Library Manager performs a bounded preflight:
