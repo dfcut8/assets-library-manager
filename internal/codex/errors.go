@@ -92,18 +92,55 @@ func classifyTransportError(err error) *AnalysisError {
 	}
 	var remote *rpcError
 	if errors.As(err, &remote) {
+		method := ""
+		var request *rpcRequestError
+		if errors.As(err, &request) {
+			method = request.Method
+		}
+		detail := rpcDiagnostic(method, remote)
 		switch remote.Code {
 		case -32001, -32002, 401, 403:
-			return newAnalysisError(ErrorAuthentication, "Codex authentication is unavailable", false, err)
+			return newAnalysisError(ErrorAuthentication, "Codex authentication is unavailable"+detail, false, err)
 		case -32601, -32602:
-			return newAnalysisError(ErrorConfiguration, "Codex App Server is incompatible", false, err)
+			return newAnalysisError(ErrorConfiguration, "Codex App Server is incompatible"+detail, false, err)
 		case 429:
-			return newAnalysisError(ErrorRetryable, "Codex rate limit reached", true, err)
+			return newAnalysisError(ErrorRetryable, "Codex rate limit reached"+detail, true, err)
 		default:
 			return newAnalysisError(ErrorRetryable,
-				fmt.Sprintf("Codex App Server request failed (RPC code %d)", remote.Code), true, err)
+				fmt.Sprintf("Codex App Server request failed (RPC code %d)%s", remote.Code, detail), true, err)
 		}
 	}
 
 	return newAnalysisError(ErrorRetryable, "Codex became unavailable", true, err)
+}
+
+func rpcDiagnostic(method string, remote *rpcError) string {
+	parts := make([]string, 0, 2)
+	if safeRPCMethod(method) {
+		parts = append(parts, "method "+method)
+	}
+	if message := sanitizeDiagnostic(remote.Message); message != "" {
+		parts = append(parts, "message "+message)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "; " + strings.Join(parts, "; ")
+}
+
+func safeRPCMethod(method string) bool {
+	if method == "" || len(method) > 128 {
+		return false
+	}
+	for _, char := range method {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '/' || char == '-' || char == '_' || char == '.' {
+			continue
+		}
+
+		return false
+	}
+
+	return true
 }

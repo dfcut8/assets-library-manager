@@ -132,14 +132,16 @@ func decodeAndNormalize(data []byte, width, height int) (AnalysisResult, normali
 	if raw.Confidence < 0 || raw.Confidence > 1 {
 		return AnalysisResult{}, normalizedAnalysis{}, invalidResponse("Codex confidence is outside 0 to 1", nil)
 	}
-	for _, value := range []*int{
-		raw.Layout.Columns, raw.Layout.Rows, raw.Layout.CellWidth,
-		raw.Layout.CellHeight, raw.Layout.FrameCount,
-	} {
-		if value != nil && *value < 1 {
-			return AnalysisResult{}, normalizedAnalysis{}, invalidResponse(
-				"Codex returned a non-positive layout measurement", nil,
-			)
+	if raw.Layout.Kind != catalog.LayoutKindSingle {
+		for _, value := range []*int{
+			raw.Layout.Columns, raw.Layout.Rows, raw.Layout.CellWidth,
+			raw.Layout.CellHeight, raw.Layout.FrameCount,
+		} {
+			if value != nil && *value < 1 {
+				return AnalysisResult{}, normalizedAnalysis{}, invalidResponse(
+					"Codex returned a non-positive layout measurement", nil,
+				)
+			}
 		}
 	}
 	layout := catalog.Layout{
@@ -147,7 +149,9 @@ func decodeAndNormalize(data []byte, width, height int) (AnalysisResult, normali
 		CellWidth: intValue(raw.Layout.CellWidth), CellHeight: intValue(raw.Layout.CellHeight),
 		FrameCount: intValue(raw.Layout.FrameCount),
 	}
-	if raw.Layout.AnimationLabel != nil {
+	if raw.Layout.Kind == catalog.LayoutKindSingle {
+		layout = catalog.Layout{Kind: catalog.LayoutKindSingle}
+	} else if raw.Layout.AnimationLabel != nil {
 		layout.AnimationLabel = normalizeSlug(*raw.Layout.AnimationLabel)
 		if layout.AnimationLabel == "" {
 			return AnalysisResult{}, normalizedAnalysis{}, invalidResponse(
@@ -325,6 +329,7 @@ func outputSchema() map[string]any {
 			},
 			"layout": map[string]any{
 				"type": "object", "additionalProperties": false,
+				"description": "For kind single, every other layout field must be null.",
 				"required": []string{
 					"kind", "columns", "rows", "cell_width", "cell_height", "frame_count", "animation_label",
 				},

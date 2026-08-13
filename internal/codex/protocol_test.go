@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -61,7 +62,7 @@ func TestTransportRoutesConcurrentResponsesByID(t *testing.T) {
 			},
 		}, nil
 	}
-	client, err := startTransport(t.Context(), "codex-test", start)
+	client, err := startTransport(t.Context(), "codex-test", start, nil)
 	if err != nil {
 		t.Fatalf("startTransport() error = %v", err)
 	}
@@ -115,7 +116,7 @@ func TestTransportLifetimeOutlivesStartupContext(t *testing.T) {
 		return proc, nil
 	}
 	startupCtx, cancelStartup := context.WithCancel(t.Context())
-	client, err := startTransport(startupCtx, "codex-test", start)
+	client, err := startTransport(startupCtx, "codex-test", start, nil)
 	if err != nil {
 		t.Fatalf("startTransport() error = %v", err)
 	}
@@ -140,6 +141,34 @@ func TestTransportRejectsOversizedRequest(t *testing.T) {
 	err := client.write(map[string]string{"text": strings.Repeat("x", maxMessageBytes)})
 	if err == nil || !strings.Contains(err.Error(), "message limit") {
 		t.Fatalf("write() error = %v", err)
+	}
+}
+
+func TestTransportRPCErrorPreservesMethodAndMessage(t *testing.T) {
+	trace := &fakeTrace{}
+	server := newFakeAppServer(t, trace, func(request fakeRequest) fakeReply {
+		if request.Method == "turn/start" {
+			return fakeReply{Error: &rpcError{Code: -32600, Message: "Invalid request"}}
+		}
+
+		return successfulReply(t, request, validAnalysisJSON)
+	})
+	client, err := startTransport(t.Context(), "codex-test", server, nil)
+	if err != nil {
+		t.Fatalf("startTransport() error = %v", err)
+	}
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+
+	err = client.request(t.Context(), "turn/start", map[string]any{}, nil)
+	var requestErr *rpcRequestError
+	var remote *rpcError
+	if !errors.As(err, &requestErr) || requestErr.Method != "turn/start" ||
+		!errors.As(err, &remote) || remote.Code != -32600 || remote.Message != "Invalid request" {
+		t.Fatalf("request() error = %#v", err)
 	}
 }
 

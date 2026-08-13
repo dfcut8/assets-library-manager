@@ -50,7 +50,7 @@ func New() *Checker {
 
 // Check verifies that the command speaks the App Server protocol and uses ChatGPT authentication.
 func (checker *Checker) Check(ctx context.Context, command string) (status Status, returnErr error) {
-	client, err := startTransport(ctx, command, checker.start)
+	client, err := startTransport(ctx, command, checker.start, nil)
 	if err != nil {
 		return Status{State: StateUnavailable}, err
 	}

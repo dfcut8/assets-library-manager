@@ -37,7 +37,12 @@ func TestDecodeAndNormalizeRejectsInvalidMetadata(t *testing.T) {
 		{name: "duplicate confidence", value: strings.Replace(validAnalysisJSON, `"confidence":0.91,`, `"confidence":0.8,"confidence":0.91,`, 1)},
 		{name: "null facet", value: strings.Replace(validAnalysisJSON, `"material":[]`, `"material":null`, 1)},
 		{name: "bad tag", value: strings.Replace(validAnalysisJSON, `"fantasy"`, `"fantasy!"`, 1)},
-		{name: "zero layout measurement", value: strings.Replace(validAnalysisJSON, `"columns":null`, `"columns":0`, 1)},
+		{name: "zero layout measurement", value: strings.Replace(
+			validAnalysisJSON,
+			`"kind":"single","columns":null`,
+			`"kind":"sprite-sheet","columns":0`,
+			1,
+		)},
 		{name: "sheet exceeds image", value: strings.Replace(
 			validAnalysisJSON,
 			`"kind":"single","columns":null,"rows":null,"cell_width":null,"cell_height":null,"frame_count":null`,
@@ -54,6 +59,23 @@ func TestDecodeAndNormalizeRejectsInvalidMetadata(t *testing.T) {
 				t.Fatalf("decodeAndNormalize() error = %#v", err)
 			}
 		})
+	}
+}
+
+func TestDecodeAndNormalizeClearsSingleLayoutDetails(t *testing.T) {
+	input := strings.Replace(
+		validAnalysisJSON,
+		`"columns":null,"rows":null,"cell_width":null,"cell_height":null,"frame_count":null,"animation_label":null`,
+		`"columns":1,"rows":1,"cell_width":64,"cell_height":64,"frame_count":1,"animation_label":"idle"`,
+		1,
+	)
+	result, normalized, err := decodeAndNormalize([]byte(input), 64, 64)
+	if err != nil {
+		t.Fatalf("decodeAndNormalize() error = %v", err)
+	}
+	if result.Layout != (normalized.Layout) || result.Layout.Kind != "single" ||
+		result.Layout.Columns != 0 || result.Layout.AnimationLabel != "" {
+		t.Fatalf("normalized single layout = %#v", result.Layout)
 	}
 }
 

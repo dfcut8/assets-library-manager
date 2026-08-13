@@ -656,7 +656,7 @@ The current asset metadata is separate from the immutable AI-run record. User ed
 
 ### 10.2 Analysis request contract
 
-- Start an ephemeral thread or otherwise ensure one asset cannot contaminate another asset's prompt context.
+- Start an ephemeral thread so one asset cannot contaminate another asset's prompt context. Interrupt its active turn on cancellation, but do not call `thread/delete`: ephemeral threads are not persisted and the App Server rejects deletion.
 - Supply only the bounded analysis rendition from Section 8.4 as a `localImage` input plus the classification instructions. The local path is necessarily sent to the local App Server process but must not be included in prompt text, logs, persisted provenance, or model-visible metadata beyond the image input itself.
 - Set the configured model and reasoning effort and supply the Section 9.2 JSON Schema as the turn's `outputSchema`.
 - Run with a read-only sandbox restricted to the specific rendition path and no workspace write or shell approval surface. The classification prompt must instruct Codex to analyze the supplied image only and not inspect unrelated host files.
