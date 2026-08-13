@@ -76,9 +76,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func newLogger(output io.Writer) *slog.Logger {
-	level := slog.LevelInfo
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL")), "debug") {
-		level = slog.LevelDebug
+	level := slog.LevelDebug
+	if configured := strings.TrimSpace(os.Getenv("ASSET_LIBRARY_MANAGER_LOG_LEVEL")); configured != "" &&
+		!strings.EqualFold(configured, "debug") {
+		level = slog.LevelInfo
 	}
 
 	return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level}))
