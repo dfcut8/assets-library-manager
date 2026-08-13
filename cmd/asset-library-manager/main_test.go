@@ -22,3 +22,14 @@ func TestUnexpectedArgumentReturnsUsageError(t *testing.T) {
 		t.Fatalf("run(unexpected) = %d, want 2", code)
 	}
 }
+
+func TestNewLoggerUsesHumanReadableText(t *testing.T) {
+	var output bytes.Buffer
+	newLogger(&output).Info("local server ready", "url", "http://127.0.0.1:7342/")
+
+	got := output.String()
+	if !strings.Contains(got, "level=INFO") || !strings.Contains(got, "msg=\"local server ready\"") ||
+		!strings.Contains(got, "url=http://127.0.0.1:7342/") || strings.HasPrefix(strings.TrimSpace(got), "{") {
+		t.Fatalf("log output = %q, want human-readable slog text", got)
+	}
+}

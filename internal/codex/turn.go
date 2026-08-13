@@ -101,11 +101,8 @@ func (analyzer *Analyzer) analyzeOnce(
 		"approvalPolicy": "never",
 		"cwd":            scratchPath,
 		"sandboxPolicy": map[string]any{
-			"type": "readOnly",
-			"access": map[string]any{
-				"type": "restricted", "includePlatformDefaults": false,
-				"readableRoots": []string{scratchPath},
-			},
+			"type":          "readOnly",
+			"networkAccess": false,
 		},
 		"outputSchema": outputSchema(),
 	}, &turnResponse); err != nil {
