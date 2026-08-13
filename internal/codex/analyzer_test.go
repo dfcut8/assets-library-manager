@@ -65,7 +65,7 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	if err := json.Unmarshal(thread.Params, &threadParams); err != nil {
 		t.Fatalf("decoding thread params: %v", err)
 	}
-	if !threadParams.Ephemeral || threadParams.ApprovalPolicy != "never" || threadParams.Sandbox != "readOnly" {
+	if !threadParams.Ephemeral || threadParams.ApprovalPolicy != "never" || threadParams.Sandbox != "read-only" {
 		t.Fatalf("thread params = %#v", threadParams)
 	}
 

@@ -61,7 +61,7 @@ func (analyzer *Analyzer) analyzeOnce(
 		"model":          analyzer.config.Model,
 		"cwd":            scratchPath,
 		"approvalPolicy": "never",
-		"sandbox":        "readOnly",
+		"sandbox":        "read-only",
 		"ephemeral":      true,
 		"serviceName":    "asset-library-manager",
 	}, &threadResponse); err != nil {
