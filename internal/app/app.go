@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dfcut8/assets-library-manager/internal/catalog"
 	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/config"
 	"github.com/dfcut8/assets-library-manager/internal/imageinspect"
@@ -27,6 +28,11 @@ type URLLauncher interface {
 	Open(ctx context.Context, targetURL string) error
 }
 
+// FileRevealer opens a trusted managed original in the platform file manager.
+type FileRevealer interface {
+	Reveal(context.Context, string) error
+}
+
 // AnalyzerStarter creates one owned production semantic analyzer.
 type AnalyzerStarter interface {
 	Start(context.Context, codex.AnalyzerConfig, codex.AttemptRecorder) (codex.Runtime, error)
@@ -36,12 +42,13 @@ type AnalyzerStarter interface {
 type Application struct {
 	logger   *slog.Logger
 	launcher URLLauncher
+	revealer FileRevealer
 	codex    AnalyzerStarter
 }
 
 // New constructs an application with explicit process-level dependencies.
-func New(logger *slog.Logger, launcher URLLauncher, starter AnalyzerStarter) *Application {
-	return &Application{logger: logger, launcher: launcher, codex: starter}
+func New(logger *slog.Logger, launcher URLLauncher, revealer FileRevealer, starter AnalyzerStarter) *Application {
+	return &Application{logger: logger, launcher: launcher, revealer: revealer, codex: starter}
 }
 
 // ExecutableRoot returns the canonical directory containing the running executable.
@@ -93,12 +100,18 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 	if err := recovery.Recover(ctx); err != nil {
 		return fmt.Errorf("recovering imports: %w", err)
 	}
+	catalogService, err := catalog.NewService(database, database, database, database)
+	if err != nil {
+		return err
+	}
+	webStatus := web.Status{CodexState: codex.StateUnavailable,
+		Database: cfg.Storage.Database, Incoming: cfg.Storage.IncomingDirectory,
+		Processed: cfg.Storage.ProcessedDirectory}
 
 	address := net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port))
-	handler, err := web.New(address, web.Status{
-		CodexState: codex.StateUnavailable,
-		Database:   cfg.Storage.Database, Incoming: cfg.Storage.IncomingDirectory,
-		Processed: cfg.Storage.ProcessedDirectory,
+	handler, err := web.New(address, web.Dependencies{
+		Status:  webStatus,
+		Catalog: catalogService, Processing: recovery, Managed: store, Revealer: a.revealer,
 	})
 	if err != nil {
 		return err
@@ -136,10 +149,11 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 		analyzer = nil
 	} else {
 		status := analyzer.Status()
-		updatedHandler, handlerErr := web.New(address, web.Status{
-			CodexState: status.State, CodexPlan: status.PlanType,
-			Database: cfg.Storage.Database, Incoming: cfg.Storage.IncomingDirectory,
-			Processed: cfg.Storage.ProcessedDirectory,
+		webStatus.CodexState = status.State
+		webStatus.CodexPlan = status.PlanType
+		updatedHandler, handlerErr := web.New(address, web.Dependencies{
+			Status:  webStatus,
+			Catalog: catalogService, Processing: recovery, Managed: store, Revealer: a.revealer,
 		})
 		if handlerErr != nil {
 			return errors.Join(
@@ -165,6 +179,18 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 			analyzerCloseErr,
 		)
 	}
+	updatedHandler, handlerErr := web.New(address, web.Dependencies{
+		Status:  webStatus,
+		Catalog: catalogService, Processing: coordinator, Managed: store, Revealer: a.revealer,
+	})
+	if handlerErr != nil {
+		var analyzerCloseErr error
+		if analyzer != nil {
+			analyzerCloseErr = analyzer.Close()
+		}
+		return errors.Join(handlerErr, shutdownServer(server, serveErr, cfg.Server.ShutdownTimeoutSeconds), analyzerCloseErr)
+	}
+	handlers.Store(updatedHandler)
 	processingCtx, cancelProcessing := context.WithCancel(ctx)
 	processingDone := make(chan error, 1)
 	go func() { processingDone <- coordinator.Run(processingCtx) }()

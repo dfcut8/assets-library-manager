@@ -1,0 +1,30 @@
+{{define "detail.html"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Detail.Title}} · Asset Library Manager</title><link rel="stylesheet" href="/static/app.css"><script src="/static/htmx-2.0.9.min.js" defer></script></head>
+<body><main class="shell"><header class="site-header"><a href="/assets" class="brand">Asset Library Manager</a><a href="/processing">Processing</a></header>{{template "asset-detail" .}}</main></body></html>
+{{end}}
+
+{{define "asset-detail"}}
+<article class="asset-detail">
+  <p><a href="/assets">← Catalog</a></p><div class="detail-hero"><img src="/assets/{{.Detail.ID}}/thumbnail" alt=""><div><h1>{{.Detail.Title}}</h1><p>{{.Detail.Description}}</p><p>{{.Detail.PrimaryType}} · {{.Detail.Style}} · {{.Detail.DisplayWidth}}×{{.Detail.DisplayHeight}} · {{.Detail.Format}}</p><p><a class="button" href="/assets/{{.Detail.ID}}/download">Download original</a></p></div></div>
+  {{if .Detail.EncodedAnimated}}<p class="notice">This file contains encoded animation; the thumbnail shows its first frame.</p>{{end}}
+  {{template "metadata-form" .}}
+  <form method="post" action="/assets/{{.Detail.ID}}/reveal"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">Reveal in file manager</button></form>
+  <section><h2>Technical details</h2><dl><div><dt>Original</dt><dd>{{.Detail.OriginalFilename}}</dd></div><div><dt>MIME type</dt><dd>{{.Detail.MIMEType}}</dd></div><div><dt>SHA-256</dt><dd><code>{{.Detail.SHA256}}</code></dd></div><div><dt>Managed path</dt><dd><code>{{.Detail.ManagedPath}}</code></dd></div></dl></section>
+  {{if .Detail.AI}}<section><h2>Codex guidance</h2><p>Generated with {{.Detail.AI.Model}} (attempt {{.Detail.AI.AttemptNumber}}).</p></section>{{end}}
+</article>
+{{end}}
+
+{{define "metadata-form"}}
+<section id="metadata-form"><h2>Edit metadata</h2>{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}
+<form method="post" action="/assets/{{.Detail.ID}}/metadata" hx-post="/assets/{{.Detail.ID}}/metadata" hx-target="#metadata-form" hx-swap="outerHTML">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="version" value="{{.Form.Version}}">
+  <label>Title <input name="title" value="{{.Form.Title}}">{{with index .Errors "title"}}<span class="field-error">{{.}}</span>{{end}}</label>
+  <label>Description <textarea name="description">{{.Form.Description}}</textarea>{{with index .Errors "description"}}<span class="field-error">{{.}}</span>{{end}}</label>
+  <label>Primary type <input name="primary_type" value="{{.Form.PrimaryType}}">{{with index .Errors "primary_type"}}<span class="field-error">{{.}}</span>{{end}}</label>
+  <label>Style <input name="style" value="{{.Form.Style}}">{{with index .Errors "style"}}<span class="field-error">{{.}}</span>{{end}}</label>
+  <label><input type="checkbox" name="pixel_art" value="true" {{if .Form.PixelArt}}checked{{end}}> Pixel art</label>
+  <fieldset><legend>Layout</legend><label>Kind <input name="layout_kind" value="{{.Form.Layout.Kind}}"></label><label>Columns <input type="number" min="0" name="columns" value="{{.Form.Layout.Columns}}"></label><label>Rows <input type="number" min="0" name="rows" value="{{.Form.Layout.Rows}}"></label><label>Cell width <input type="number" min="0" name="cell_width" value="{{.Form.Layout.CellWidth}}"></label><label>Cell height <input type="number" min="0" name="cell_height" value="{{.Form.Layout.CellHeight}}"></label><label>Frames <input type="number" min="0" name="frame_count" value="{{.Form.Layout.FrameCount}}"></label><label>Animation label <input name="animation_label" value="{{.Form.Layout.AnimationLabel}}"></label>{{with index .Errors "layout"}}<span class="field-error">{{.}}</span>{{end}}</fieldset>
+  <fieldset><legend>Tags</legend>{{range .Form.Tags}}<div class="tag-fields"><input name="tag_facet" value="{{.Facet}}" placeholder="facet"><input name="tag_slug" value="{{.Slug}}" placeholder="slug"><input name="tag_label" value="{{.Label}}" placeholder="label"></div>{{end}}{{with index .Errors "tags"}}<span class="field-error">{{.}}</span>{{end}}</fieldset>
+  {{with index .Errors "version"}}<p class="field-error">{{.}}</p>{{end}}<button type="submit">Save metadata</button>
+</form></section>
+{{end}}

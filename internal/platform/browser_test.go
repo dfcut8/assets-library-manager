@@ -16,3 +16,18 @@ func TestBrowserCommandsDoNotUseShells(t *testing.T) {
 		t.Fatal("browserCommand(unsupported) error = nil")
 	}
 }
+
+func TestRevealCommandsDoNotUseShells(t *testing.T) {
+	for _, goos := range []string{"windows", "darwin", "linux"} {
+		name, args, err := revealCommand(goos, "/trusted/asset.png")
+		if err != nil {
+			t.Fatalf("revealCommand(%q) error = %v", goos, err)
+		}
+		if name == "" || len(args) == 0 {
+			t.Fatalf("revealCommand(%q) = %q %#v", goos, name, args)
+		}
+	}
+	if _, _, err := revealCommand("plan9", "/trusted/asset.png"); err == nil {
+		t.Fatal("revealCommand(unsupported) error = nil")
+	}
+}
