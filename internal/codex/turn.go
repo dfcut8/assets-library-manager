@@ -238,5 +238,26 @@ func classifyTurnFailure(code string, message string) *AnalysisError {
 		return newAnalysisError(ErrorRetryable, "Codex turn was interrupted", true, nil)
 	}
 
+	if safeCode := safeTurnFailureCode(code); safeCode != "" {
+		return newAnalysisError(ErrorRetryable,
+			"Codex could not complete classification (code "+safeCode+")", true, nil)
+	}
+
 	return newAnalysisError(ErrorRetryable, "Codex could not complete classification", true, nil)
+}
+
+func safeTurnFailureCode(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 128 {
+		return ""
+	}
+	for _, char := range code {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' {
+			continue
+		}
+		return ""
+	}
+
+	return code
 }
