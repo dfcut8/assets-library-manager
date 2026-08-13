@@ -58,6 +58,27 @@ func TestInspectorInspectPNGTransparencyPaletteAndDerivatives(t *testing.T) {
 	}
 }
 
+func TestInspectorInspectIndexedPNGTransparencyWithoutAlphaChannel(t *testing.T) {
+	t.Parallel()
+
+	palette := color.Palette{
+		color.NRGBA{R: 0xff, A: 0xff},
+		color.NRGBA{G: 0xff, A: 0x00},
+	}
+	source := image.NewPaletted(image.Rect(0, 0, 2, 1), palette)
+	source.Pix = []byte{0, 1}
+	data := encodePNG(t, source)
+
+	inspection, err := New().Inspect(context.Background(), bytes.NewReader(data), testLimits(".png"))
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	if inspection.HasAlpha || !inspection.HasTransparency {
+		t.Fatalf("Inspect() alpha metadata = (%t, %t), want (false, true)",
+			inspection.HasAlpha, inspection.HasTransparency)
+	}
+}
+
 func TestInspectorInspectJPEGAppliesEXIFOrientation(t *testing.T) {
 	t.Parallel()
 

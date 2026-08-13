@@ -306,7 +306,7 @@ func (coordinator *Coordinator) failedResult(
 		"item_id", item.ID,
 		"code", code,
 		"message", message,
-		"error", cause,
+		"error", processingFailureDiagnostic(cause),
 	)
 	result := itemResult{
 		sourceID: work.source.ID, path: work.sourcePath, itemName: work.item.ZIPEntryName,
@@ -326,6 +326,15 @@ func (coordinator *Coordinator) failedResult(
 	}
 
 	return result
+}
+
+func processingFailureDiagnostic(err error) error {
+	var processingErr *itemProcessingError
+	if errors.As(err, &processingErr) && processingErr.cause != nil {
+		return processingErr.cause
+	}
+
+	return err
 }
 
 func classifyProcessingFailure(err error) (ErrorCode, string) {

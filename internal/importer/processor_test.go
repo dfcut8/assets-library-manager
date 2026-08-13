@@ -85,7 +85,11 @@ func TestFailedResultLogsWrappedCauseAtDebugLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cause := errors.New("inserting staged asset: constraint failed")
+	cause := itemError(
+		ErrorCodeStorage,
+		"asset metadata could not be committed",
+		errors.New("inserting staged asset: constraint failed"),
+	)
 	coordinator.failedResult(
 		context.Background(),
 		workItem{sourcePath: sourcePath},
