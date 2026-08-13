@@ -120,7 +120,9 @@ func (l Layout) Validate(imageWidth, imageHeight int) error {
 	if l.Kind == LayoutKindTileSheet && l.FrameCount != 0 {
 		return errors.New("catalog: tile sheets must not declare animation frames")
 	}
-	if hasGrid && l.FrameCount > l.Columns*l.Rows {
+	if hasGrid && l.FrameCount > 0 &&
+		(l.FrameCount/l.Columns > l.Rows ||
+			(l.FrameCount/l.Columns == l.Rows && l.FrameCount%l.Columns != 0)) {
 		return errors.New("catalog: frame count exceeds grid capacity")
 	}
 	if l.AnimationLabel != "" {

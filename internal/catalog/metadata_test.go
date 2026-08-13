@@ -30,11 +30,13 @@ func TestPrototypeDerivedLayouts(t *testing.T) {
 }
 
 func TestLayoutRejectsInvalidGrids(t *testing.T) {
+	maximumInt := int(^uint(0) >> 1)
 	tests := []Layout{
 		{Kind: LayoutKindSingle, Columns: 1},
 		{Kind: LayoutKindSpriteSheet, Columns: 4, Rows: 4, CellWidth: 32},
 		{Kind: LayoutKindSpriteSheet, Columns: 4, Rows: 4, CellWidth: 32, CellHeight: 32, FrameCount: 17},
 		{Kind: LayoutKindTileSheet, Columns: 16, Rows: 9, CellWidth: 32, CellHeight: 32, FrameCount: 1},
+		{Kind: LayoutKindSpriteSheet, Columns: maximumInt, Rows: maximumInt, CellWidth: 1, CellHeight: 1, FrameCount: maximumInt},
 	}
 	for _, layout := range tests {
 		if err := layout.Validate(128, 128); err == nil {
