@@ -18,6 +18,7 @@ import (
 
 	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/config"
+	"github.com/dfcut8/assets-library-manager/internal/platform"
 	"github.com/dfcut8/assets-library-manager/internal/storage"
 )
 
@@ -30,6 +31,7 @@ func TestRunBootstrapsServesLaunchesAndShutsDown(t *testing.T) {
 	application := New(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		launcher,
+		platform.Revealer{},
 		staticCodexStarter{},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,6 +72,7 @@ func TestRunRefusesDatabaseRemovalWithRetainedProcessedData(t *testing.T) {
 	application := New(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		launcher,
+		platform.Revealer{},
 		staticCodexStarter{},
 	)
 

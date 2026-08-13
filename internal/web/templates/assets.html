@@ -2,52 +2,46 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Asset Library Manager</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css"><script src="/static/htmx-2.0.9.min.js" defer></script>
 </head>
 <body>
-  <main>
-    <header>
-      <p class="eyebrow">Local asset catalog</p>
-      <h1>Asset Library Manager is running</h1>
-      <p>The runnable foundation is initialized. Image importing and catalog browsing arrive in later milestones.</p>
-    </header>
-
-    {{if eq .CodexState "ready"}}
-    <section class="status good" aria-label="Codex status">
-      <strong>Codex subscription ready</strong>
-      <span>The local Codex App Server is authenticated with ChatGPT{{if .CodexPlan}} ({{.CodexPlan}} plan){{end}}.</span>
-    {{else if eq .CodexState "signed_out"}}
-    <section class="status warning" aria-label="Codex status">
-      <strong>Codex sign-in required</strong>
-      <span>Run <code>codex login</code>, sign in with ChatGPT, then restart Asset Library Manager.</span>
-    {{else if eq .CodexState "api_key"}}
-    <section class="status warning" aria-label="Codex status">
-      <strong>Codex is using an API key</strong>
-      <span>Run <code>codex logout</code> followed by <code>codex login</code> and choose ChatGPT subscription access.</span>
-    {{else if eq .CodexState "unsupported"}}
-    <section class="status warning" aria-label="Codex status">
-      <strong>Unsupported Codex account</strong>
-      <span>Asset processing requires Codex authenticated with a ChatGPT subscription.</span>
-    </section>
-    {{else}}
-    <section class="status warning" aria-label="Codex status">
-      <strong>Codex unavailable</strong>
-      <span>Install the Codex CLI, ensure <code>codex</code> is on PATH, run <code>codex login</code>, then restart. Existing catalog data remains available.</span>
-    </section>
-    {{end}}
-
-    <section>
-      <h2>Runtime layout</h2>
-      <dl>
-        <div><dt>Database</dt><dd><code>{{.Database}}</code></dd></div>
-        <div><dt>Incoming</dt><dd><code>{{.Incoming}}</code></dd></div>
-        <div><dt>Processed</dt><dd><code>{{.Processed}}</code></dd></div>
-      </dl>
-    </section>
+  <main class="shell">
+    <header class="site-header"><a href="/assets" class="brand">Asset Library Manager</a><a href="/processing">Processing</a></header>
+    {{template "processing-status" .}}
+    <section class="catalog-heading"><h1>Catalog</h1><p>Browse imported, ready-to-use assets.</p></section>
+    <form class="filters" action="/assets" method="get" hx-get="/assets/fragment" hx-target="#catalog-results" hx-push-url="true">
+      <label>Search <input type="search" name="q" value="{{.Query.Q}}" placeholder="Search titles, descriptions, and tags"></label>
+      <label>Type <input name="type" value="{{range $index, $type := .Query.Types}}{{if $index}},{{end}}{{$type}}{{end}}" placeholder="character"></label>
+      <label>Style <input name="style" value="{{range $index, $style := .Query.Styles}}{{if $index}},{{end}}{{$style}}{{end}}" placeholder="pixel art"></label>
+      <label>Sort <select name="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option><option value="width">Width</option><option value="height">Height</option><option value="file-size">File size</option><option value="relevance">Relevance</option></select></label>
+      <button type="submit">Apply filters</button>
+    </form>
+    {{template "catalog-results" .}}
   </main>
 </body>
 </html>
 {{end}}
+
+{{define "catalog-results"}}
+<section id="catalog-results" class="catalog-results">
+  <p class="result-count">{{.Results.TotalItems}} asset{{if ne .Results.TotalItems 1}}s{{end}}</p>
+  {{if .Results.Items}}
+  <div class="asset-grid">
+    {{range .Results.Items}}
+    <article class="asset-card"><a href="/assets/{{.ID}}"><img src="/assets/{{.ID}}/thumbnail" alt="" loading="lazy"><strong>{{.Title}}</strong><span>{{.PrimaryType}} · {{.DisplayWidth}}×{{.DisplayHeight}}</span></a></article>
+    {{end}}
+  </div>
+  {{else}}<p class="empty">No ready assets match these filters.</p>{{end}}
+</section>
+{{end}}
+
+{{define "processing-status"}}
+<section class="processing {{if .Processing.Active}}active{{end}}" {{if .Processing.Active}}hx-get="/processing" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  {{if .Processing.Active}}<strong>Processing {{.Processing.ItemsReady}} / {{.Processing.ItemsTotal}} items</strong><span>{{.Processing.SourcesCompleted}} / {{.Processing.SourcesTotal}} sources finished</span>
+  {{else}}<strong>Processing is idle</strong>{{if .Processing.CompletedAt}}<span>Startup scan completed.</span>{{end}}{{end}}
+</section>
+{{end}}
+
+{{define "request-error"}}<p class="form-error" role="alert">{{.Message}}</p>{{end}}
