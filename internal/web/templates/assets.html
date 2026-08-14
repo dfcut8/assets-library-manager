@@ -11,11 +11,11 @@
     <header class="site-header"><a href="/assets" class="brand">Asset Library Manager</a><a href="/processing">Processing</a></header>
     {{template "processing-status" .}}
     <section class="catalog-heading"><h1>Catalog</h1><p>Browse imported, ready-to-use assets.</p></section>
-    <form class="filters" action="/assets" method="get" hx-get="/assets/fragment" hx-target="#catalog-results" hx-push-url="true">
+    <form class="filters" action="/assets" method="get" hx-get="/assets" hx-target="#catalog-results" hx-swap="outerHTML" hx-push-url="true">
       <label>Search <input type="search" name="q" value="{{.Query.Q}}" placeholder="Search titles, descriptions, and tags"></label>
       <label>Type <input name="type" value="{{range $index, $type := .Query.Types}}{{if $index}},{{end}}{{$type}}{{end}}" placeholder="character"></label>
       <label>Style <input name="style" value="{{range $index, $style := .Query.Styles}}{{if $index}},{{end}}{{$style}}{{end}}" placeholder="pixel art"></label>
-      <label>Sort <select name="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option><option value="width">Width</option><option value="height">Height</option><option value="file-size">File size</option><option value="relevance">Relevance</option></select></label>
+      <label>Sort <select name="sort"><option value="newest"{{if eq .Query.Sort "newest"}} selected{{end}}>Newest</option><option value="oldest"{{if eq .Query.Sort "oldest"}} selected{{end}}>Oldest</option><option value="title"{{if eq .Query.Sort "title"}} selected{{end}}>Title</option><option value="width"{{if eq .Query.Sort "width"}} selected{{end}}>Width</option><option value="height"{{if eq .Query.Sort "height"}} selected{{end}}>Height</option><option value="file-size"{{if eq .Query.Sort "file-size"}} selected{{end}}>File size</option><option value="relevance"{{if eq .Query.Sort "relevance"}} selected{{end}}>Relevance</option></select></label>
       <button type="submit">Apply filters</button>
     </form>
     {{template "catalog-results" .}}

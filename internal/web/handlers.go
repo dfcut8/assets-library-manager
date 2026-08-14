@@ -58,10 +58,15 @@ func (s *server) catalog(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusInternalServerError, "Unable to load the catalog.")
 		return
 	}
-	s.render(w, "assets.html", pageData{
+	data := pageData{
 		Status: s.dependencies.Status, CSRFToken: csrfToken(r.Context()), Query: query,
 		Results: results, Processing: s.snapshot(),
-	})
+	}
+	if isHTMX(r) {
+		s.render(w, "catalog-results", data)
+		return
+	}
+	s.render(w, "assets.html", data)
 }
 
 func (s *server) catalogFragment(w http.ResponseWriter, r *http.Request) {
@@ -457,7 +462,7 @@ func parseAssetQuery(r *http.Request) (catalog.AssetQuery, error) {
 	values := r.URL.Query()
 	query := catalog.AssetQuery{
 		Q: values.Get("q"), Sort: catalog.Sort(values.Get("sort")),
-		Styles: values["style"], Orientations: values["orientation"], Formats: values["format"],
+		Styles: queryList(values["style"], false), Orientations: values["orientation"], Formats: values["format"],
 	}
 	var err error
 	if query.Page, err = queryInt(values.Get("page")); err != nil {
@@ -466,7 +471,7 @@ func parseAssetQuery(r *http.Request) (catalog.AssetQuery, error) {
 	if query.PageSize, err = queryInt(values.Get("page_size")); err != nil {
 		return catalog.AssetQuery{}, err
 	}
-	for _, value := range values["type"] {
+	for _, value := range queryList(values["type"], true) {
 		query.Types = append(query.Types, catalog.PrimaryType(value))
 	}
 	for _, value := range values["tag"] {
@@ -505,6 +510,24 @@ func parseAssetQuery(r *http.Request) (catalog.AssetQuery, error) {
 	}
 
 	return catalog.NormalizeAssetQuery(query)
+}
+
+func queryList(values []string, lowercase bool) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		for item := range strings.SplitSeq(value, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if lowercase {
+				item = strings.ToLower(item)
+			}
+			result = append(result, item)
+		}
+	}
+
+	return result
 }
 
 func queryInt(value string) (int, error) {
