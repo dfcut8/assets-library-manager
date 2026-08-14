@@ -5,10 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"time"
 )
-
-const orphanStagingAge = 24 * time.Hour
 
 // Recover reconciles persisted workflow state with managed and staging files before HTTP startup.
 func (coordinator *Coordinator) Recover(ctx context.Context) error {
@@ -25,10 +22,8 @@ func (coordinator *Coordinator) Recover(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing referenced staging files: %w", err)
 	}
-	if _, err := coordinator.store.CleanOrphanStaging(
-		ctx, referenced, coordinator.now().UTC().Add(-orphanStagingAge),
-	); err != nil {
-		return fmt.Errorf("cleaning orphan staging files: %w", err)
+	if err := coordinator.store.CleanStaging(ctx, referenced); err != nil {
+		return fmt.Errorf("cleaning staging directory: %w", err)
 	}
 	if err := coordinator.recoverSourceDeletions(ctx); err != nil {
 		return err
