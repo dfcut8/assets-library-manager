@@ -79,7 +79,9 @@ func New(allowedHost string, dependencies Dependencies) (http.Handler, error) {
 	if dependencies.Catalog == nil || dependencies.Managed == nil || dependencies.Files == nil {
 		return nil, errors.New("creating web server: dependencies are incomplete")
 	}
-	page, err := template.ParseFS(assets, "templates/*.html")
+	page, err := template.New("pages").Funcs(template.FuncMap{
+		"groupTags": groupTags,
+	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parsing web templates: %w", err)
 	}
