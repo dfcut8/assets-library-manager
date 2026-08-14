@@ -52,6 +52,38 @@ func TestCatalogRoutesRenderAndRespectHTMX(t *testing.T) {
 			t.Fatalf("detail does not include asset preview markup %q: %q", previewMarkup, detail.Body.String())
 		}
 	}
+	for _, tagGroupMarkup := range []string{
+		`<span class="tag-facet">palette:</span> <span class="tag-summary-values">black, teal</span>`,
+		`<span class="tag-facet">subject:</span> <span class="tag-summary-values">large-eyes, snout</span>`,
+	} {
+		if !strings.Contains(detail.Body.String(), tagGroupMarkup) {
+			t.Fatalf("detail does not group tags with markup %q: %q", tagGroupMarkup, detail.Body.String())
+		}
+	}
+}
+
+func TestGroupTagsPreservesFacetAndTagOrder(t *testing.T) {
+	t.Parallel()
+	tags := []catalog.Tag{
+		{Facet: "palette", Slug: "black"},
+		{Facet: "subject", Slug: "large-eyes"},
+		{Facet: "palette", Slug: "teal"},
+		{Facet: "subject", Slug: "snout"},
+	}
+
+	groups := groupTags(tags)
+	if len(groups) != 2 {
+		t.Fatalf("groupTags() group count = %d, want 2", len(groups))
+	}
+	if groups[0].Facet != "palette" || groups[1].Facet != "subject" {
+		t.Fatalf("groupTags() facets = %q, %q", groups[0].Facet, groups[1].Facet)
+	}
+	if groups[0].Tags[0].Slug != "black" || groups[0].Tags[1].Slug != "teal" {
+		t.Fatalf("groupTags() palette tags = %+v", groups[0].Tags)
+	}
+	if groups[1].Tags[0].Slug != "large-eyes" || groups[1].Tags[1].Slug != "snout" {
+		t.Fatalf("groupTags() subject tags = %+v", groups[1].Tags)
+	}
 }
 
 func TestCatalogControlsUpdateAutomaticallyAndPreserveQuery(t *testing.T) {
@@ -230,7 +262,21 @@ func (fakeCatalog) Get(_ context.Context, id catalog.AssetID) (catalog.AssetDeta
 	if id.String() != testAssetID {
 		return catalog.AssetDetail{}, catalog.ErrNotFound
 	}
-	return catalog.AssetDetail{AssetSummary: catalog.AssetSummary{ID: id, Title: "Blue Knight", PrimaryType: catalog.PrimaryTypeCharacter, Style: "Pixel art", Version: 1, Format: "png"}, Description: "A blue knight.", MIMEType: "image/png", OriginalFilename: "asset.png", ManagedPath: "asset.png", FileSizeBytes: int64(len("original bytes")), Layout: catalog.Layout{Kind: catalog.LayoutKindSingle}}, nil
+	return catalog.AssetDetail{
+		AssetSummary: catalog.AssetSummary{
+			ID: id, Title: "Blue Knight", PrimaryType: catalog.PrimaryTypeCharacter,
+			Style: "Pixel art", Version: 1, Format: "png",
+			Tags: []catalog.Tag{
+				{Facet: "palette", Slug: "black", Label: "Black"},
+				{Facet: "palette", Slug: "teal", Label: "Teal"},
+				{Facet: "subject", Slug: "large-eyes", Label: "Large Eyes"},
+				{Facet: "subject", Slug: "snout", Label: "Snout"},
+			},
+		},
+		Description: "A blue knight.", MIMEType: "image/png", OriginalFilename: "asset.png",
+		ManagedPath: "asset.png", FileSizeBytes: int64(len("original bytes")),
+		Layout: catalog.Layout{Kind: catalog.LayoutKindSingle},
+	}, nil
 }
 
 func (fakeCatalog) GetThumbnail(context.Context, catalog.AssetID) (catalog.Thumbnail, error) {

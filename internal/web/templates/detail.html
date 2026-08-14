@@ -25,7 +25,10 @@
   <label>Style <input name="style" value="{{.Form.Style}}">{{with index .Errors "style"}}<span class="field-error">{{.}}</span>{{end}}</label>
   <label><input type="checkbox" name="pixel_art" value="true" {{if .Form.PixelArt}}checked{{end}}> Pixel art</label>
   <fieldset><legend>Layout</legend><label>Kind <input name="layout_kind" value="{{.Form.Layout.Kind}}"></label><label>Columns <input type="number" min="0" name="columns" value="{{.Form.Layout.Columns}}"></label><label>Rows <input type="number" min="0" name="rows" value="{{.Form.Layout.Rows}}"></label><label>Cell width <input type="number" min="0" name="cell_width" value="{{.Form.Layout.CellWidth}}"></label><label>Cell height <input type="number" min="0" name="cell_height" value="{{.Form.Layout.CellHeight}}"></label><label>Frames <input type="number" min="0" name="frame_count" value="{{.Form.Layout.FrameCount}}"></label><label>Animation label <input name="animation_label" value="{{.Form.Layout.AnimationLabel}}"></label>{{with index .Errors "layout"}}<span class="field-error">{{.}}</span>{{end}}</fieldset>
-  <fieldset><legend>Tags</legend>{{range .Form.Tags}}<div class="tag-fields"><input name="tag_facet" value="{{.Facet}}" placeholder="facet"><input name="tag_slug" value="{{.Slug}}" placeholder="slug"><input name="tag_label" value="{{.Label}}" placeholder="label"></div>{{end}}{{with index .Errors "tags"}}<span class="field-error">{{.}}</span>{{end}}</fieldset>
+  <fieldset class="tag-editor"><legend>Tags</legend>
+    {{range groupTags .Form.Tags}}<details class="tag-group"><summary><span class="tag-facet">{{.Facet}}:</span> <span class="tag-summary-values">{{range $index, $tag := .Tags}}{{if $index}}, {{end}}{{$tag.Slug}}{{end}}</span></summary><div class="tag-group-fields">{{range .Tags}}<div class="tag-fields"><input type="hidden" name="tag_facet" value="{{.Facet}}"><input name="tag_slug" value="{{.Slug}}" placeholder="slug" aria-label="{{.Facet}} tag slug"><input name="tag_label" value="{{.Label}}" placeholder="label" aria-label="{{.Facet}} tag label"></div>{{end}}</div></details>{{end}}
+    {{with index .Errors "tags"}}<span class="field-error">{{.}}</span>{{end}}
+  </fieldset>
   {{with index .Errors "version"}}<p class="field-error">{{.}}</p>{{end}}<button type="submit">Save metadata</button>
 </form></section>
 {{end}}

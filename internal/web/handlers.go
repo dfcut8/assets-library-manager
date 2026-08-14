@@ -47,6 +47,11 @@ type metadataForm struct {
 	Tags        []catalog.Tag
 }
 
+type tagGroup struct {
+	Facet string
+	Tags  []catalog.Tag
+}
+
 func (s *server) catalog(w http.ResponseWriter, r *http.Request) {
 	query, err := parseAssetQuery(r)
 	if err != nil {
@@ -396,6 +401,25 @@ func formFromDetail(detail catalog.AssetDetail) metadataForm {
 		PrimaryType: detail.PrimaryType, Style: detail.Style, PixelArt: detail.PixelArt,
 		Layout: detail.Layout, Tags: append([]catalog.Tag(nil), detail.Tags...),
 	}
+}
+
+func groupTags(tags []catalog.Tag) []tagGroup {
+	groups := make([]tagGroup, 0)
+	groupIndexes := make(map[string]int)
+	for _, tag := range tags {
+		groupIndex, exists := groupIndexes[tag.Facet]
+		if !exists {
+			groupIndex = len(groups)
+			groupIndexes[tag.Facet] = groupIndex
+			groups = append(groups, tagGroup{
+				Facet: tag.Facet,
+				Tags:  make([]catalog.Tag, 0),
+			})
+		}
+		groups[groupIndex].Tags = append(groups[groupIndex].Tags, tag)
+	}
+
+	return groups
 }
 
 func parseMetadataForm(r *http.Request) (metadataForm, catalog.MetadataEdit, map[string]string) {
