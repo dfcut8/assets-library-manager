@@ -433,6 +433,26 @@ type Tag struct {
 	Origin string
 }
 
+// TokenUsage is the bounded model-token usage for one or more semantic-analysis attempts.
+type TokenUsage struct {
+	InputTokens           int64
+	CachedInputTokens     int64
+	CacheWriteInputTokens int64
+	OutputTokens          int64
+	ReasoningOutputTokens int64
+	TotalTokens           int64
+}
+
+// Add accumulates another token-usage measurement.
+func (usage *TokenUsage) Add(other TokenUsage) {
+	usage.InputTokens += other.InputTokens
+	usage.CachedInputTokens += other.CachedInputTokens
+	usage.CacheWriteInputTokens += other.CacheWriteInputTokens
+	usage.OutputTokens += other.OutputTokens
+	usage.ReasoningOutputTokens += other.ReasoningOutputTokens
+	usage.TotalTokens += other.TotalTokens
+}
+
 // AIRun records one immutable semantic-analysis attempt.
 type AIRun struct {
 	ID                   ID
@@ -478,7 +498,8 @@ type AnalysisResult struct {
 
 // AnalysisProvenance is the accepted immutable AI attempt committed with the asset.
 type AnalysisProvenance struct {
-	Run AIRun
+	Run        AIRun
+	TokenUsage TokenUsage
 }
 
 // StagedAsset contains all data committed before filesystem promotion.

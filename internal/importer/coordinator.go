@@ -119,6 +119,9 @@ type Coordinator struct {
 	reservationMu sync.Mutex
 	reservations  map[Digest]*reservation
 	stopped       bool
+
+	usageMu    sync.Mutex
+	cycleUsage TokenUsage
 }
 
 // NewCoordinator validates dependencies and constructs a single-use startup coordinator.

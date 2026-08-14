@@ -144,7 +144,6 @@ func startTransport(
 			"optOutNotificationMethods": []string{
 				"item/agentMessage/delta", "item/reasoning/summaryTextDelta",
 				"item/reasoning/summaryPartAdded", "item/reasoning/textDelta",
-				"thread/tokenUsage/updated",
 			},
 		},
 	}, &initialized); err != nil {

@@ -87,6 +87,8 @@ $env:ASSET_LIBRARY_MANAGER_LOG_LEVEL = 'info'
 
 Debug logs include protocol method names, numeric request IDs, durations, and bounded server error messages. They do not include prompts, image bytes, output metadata, credentials, or complete request/response payloads.
 
+At info level, each completed import item logs its input, cached-input, cache-write-input, output, reasoning-output, and total token usage. The final startup processing-cycle log reports the sums across every analysis attempt in the cycle, including retry attempts and attempts that ended in failure.
+
 ## Startup preflight and status
 
 After configuration, storage, and SQLite initialize, Asset Library Manager performs a bounded preflight:
