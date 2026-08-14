@@ -50,7 +50,7 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	}
 	if provenance.Run.Outcome != "accepted" || provenance.Run.NormalizedResultJSON == "" ||
 		provenance.Run.RequestID != "thread-1/turn-1" ||
-		provenance.Run.AttemptNumber != 1 {
+		provenance.Run.AttemptNumber != 1 || provenance.Run.PromptVersion != "asset-semantic-v2" {
 		t.Fatalf("Analyze() provenance = %#v", provenance)
 	}
 	if len(recorder.runs()) != 0 {

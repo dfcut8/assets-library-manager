@@ -7,6 +7,37 @@ import (
 	"testing"
 )
 
+func TestAnalysisPromptRequiresFourWayAssetRoleDecision(t *testing.T) {
+	t.Parallel()
+	prompt := analysisPrompt(1024, 512)
+	tests := []struct {
+		name     string
+		required string
+	}{
+		{name: "tileset role", required: "Tileset:"},
+		{name: "sprite sheet role", required: "Sprite sheet:"},
+		{name: "individual sprite role", required: "Individual sprite:"},
+		{name: "background role", required: "Background:"},
+		{name: "tile sheet mapping", required: `layout.kind "tile-sheet"`},
+		{name: "sprite sheet mapping", required: `layout.kind "sprite-sheet"`},
+		{name: "background mapping", required: `layout.kind "single" and primary_type "background"`},
+		{name: "source dimensions", required: "original decoded image dimensions are 1024 by 512 pixels"},
+		{
+			name:     "unknown grid measurements",
+			required: "Do not return \"single\" merely because a visible sheet's grid measurements are uncertain",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if !strings.Contains(prompt, test.required) {
+				t.Errorf("analysisPrompt() does not contain %q", test.required)
+			}
+		})
+	}
+}
+
 func TestDecodeAndNormalize(t *testing.T) {
 	input := strings.Replace(validAnalysisJSON, `"forest-knight"`, `"forest knight"`, 1)
 	result, normalized, err := decodeAndNormalize([]byte(input), 64, 64)
