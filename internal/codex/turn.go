@@ -92,7 +92,7 @@ func (analyzer *Analyzer) analyzeOnce(
 	if err := analyzer.client.request(ctx, "turn/start", map[string]any{
 		"threadId": threadID,
 		"input": []map[string]any{
-			{"type": "text", "text": analysisPrompt},
+			{"type": "text", "text": analysisPrompt(input.DisplayWidth, input.DisplayHeight)},
 			{"type": "localImage", "path": localImagePath},
 		},
 		"model":          analyzer.config.Model,

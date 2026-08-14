@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"unicode"
@@ -13,7 +14,33 @@ import (
 	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
 
-const analysisPrompt = `Inspect only the supplied game-development image and return only the requested structured metadata. Do not inspect unrelated host files. Describe visible content, not filenames or inferred names, ownership, licensing, or provenance. Provide up to 64 useful positive tags without filler. Use lowercase kebab-case tag slugs, omit absence-only tags, and use only the six requested facets. Treat layout independently from content type. Use null for unknown sheet measurements.`
+const analysisPromptTemplate = `Inspect only the supplied game-development image and return only the requested structured metadata.
+Do not inspect unrelated host files. Describe visible content, not filenames or inferred names, ownership, licensing,
+or provenance.
+
+Before producing any other metadata, always choose the best matching asset role from these four possibilities using visible evidence:
+- Tileset: reusable terrain, platform, wall, edge, corner, or fill tiles intended to assemble a larger map.
+  Return layout.kind "tile-sheet".
+- Sprite sheet: multiple discrete sprites, animation frames, poses, directions, objects, icons, or effects collected
+  on one canvas. Return layout.kind "sprite-sheet".
+- Individual sprite: one standalone object, character, icon, effect, or other isolated game graphic.
+  Return layout.kind "single".
+- Background: one continuous scene, backdrop, skybox, wallpaper, or parallax layer intended to fill a view.
+  Return layout.kind "single" and primary_type "background".
+
+Do not return "single" merely because a visible sheet's grid measurements are uncertain; retain the appropriate sheet
+kind and use null for unknown sheet measurements. A regular grid of modular map pieces is a tile sheet, while a grid
+or strip of separate objects or animation poses is a sprite sheet. File animation and transparency alone do not
+determine the role.
+
+The original decoded image dimensions are %d by %d pixels. Estimate sheet measurements against those original
+dimensions, even if the supplied analysis rendition is smaller. Treat layout independently from content type except
+for the background mapping above. Provide up to 64 useful positive tags without filler. Use lowercase kebab-case tag
+slugs, omit absence-only tags, and use only the six requested facets.`
+
+func analysisPrompt(width, height int) string {
+	return fmt.Sprintf(analysisPromptTemplate, width, height)
+}
 
 var facetOrder = []string{"subject", "theme", "material", "viewpoint", "composition", "palette"}
 
@@ -329,7 +356,10 @@ func outputSchema() map[string]any {
 			},
 			"layout": map[string]any{
 				"type": "object", "additionalProperties": false,
-				"description": "For kind single, every other layout field must be null.",
+				"description": "Classify visible modular map tiles as tile-sheet, multiple discrete sprites " +
+					"or frames as sprite-sheet, and an individual sprite or background as single. " +
+					"Unknown grid measurements do not make a sheet single. For kind single, every " +
+					"other layout field must be null.",
 				"required": []string{
 					"kind", "columns", "rows", "cell_width", "cell_height", "frame_count", "animation_label",
 				},

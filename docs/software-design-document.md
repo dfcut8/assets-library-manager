@@ -614,7 +614,7 @@ The AI response must conform to a strict schema equivalent to:
 }
 ```
 
-The prompt must request specific visual evidence and avoid guessing proper names, ownership, licensing, or provenance. The analyzer validates every field and rejects output that does not match the schema.
+The prompt must request specific visual evidence and avoid guessing proper names, ownership, licensing, or provenance. Before producing other metadata, it must explicitly choose the best-fitting role among tileset, sprite sheet, individual sprite, and background. A sheet remains a sheet when its grid measurements are unknown; nullable measurements must not cause it to fall back to `single`. The prompt includes the original decoded dimensions so measurements remain relative to the source when the analysis rendition was resized. The analyzer validates every field and rejects output that does not match the schema.
 
 ### 9.3 Tag rules
 

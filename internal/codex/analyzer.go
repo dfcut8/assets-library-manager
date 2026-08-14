@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	promptVersion = "asset-semantic-v1"
+	promptVersion = "asset-semantic-v2"
 	schemaVersion = "asset-semantic-v1"
 	providerName  = "openai"
 	imageDetail   = "auto"
