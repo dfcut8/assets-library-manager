@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,123 @@ func TestRunBootstrapsServesLaunchesAndShutsDown(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "assets.db")); err != nil {
 		t.Fatalf("database not created: %v", err)
+	}
+}
+
+func TestRunPreservesRequestProtectionAcrossHandlerUpdates(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Server.Port = availablePort(t)
+	writeApplicationConfig(t, root, cfg)
+	launcher := &recordingLauncher{called: make(chan string, 1)}
+	starter := &blockingCodexStarter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	application := New(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		launcher,
+		platform.FileLauncher{},
+		starter,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- application.Run(ctx, root)
+	}()
+	stopped := false
+	t.Cleanup(func() {
+		cancel()
+		if stopped {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("application did not shut down during cleanup")
+		}
+	})
+
+	var targetURL string
+	select {
+	case targetURL = <-launcher.called:
+	case <-time.After(10 * time.Second):
+		t.Fatal("application did not reach browser launch")
+	}
+	select {
+	case <-starter.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("application did not reach Codex startup")
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(targetURL + "assets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeHTTPResponse(t, response)
+	var cookie *http.Cookie
+	for _, candidate := range response.Cookies() {
+		if candidate.Name == "alm_csrf" {
+			cookie = candidate
+			break
+		}
+	}
+	if cookie == nil {
+		t.Fatal("initial response did not set request-protection cookie")
+	}
+	token, _, ok := strings.Cut(cookie.Value, ".")
+	if !ok || token == "" {
+		t.Fatalf("request-protection cookie = %q", cookie.Value)
+	}
+
+	close(starter.release)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		response, err = client.Get(targetURL + "processing")
+		if err == nil {
+			body, readErr := io.ReadAll(response.Body)
+			closeHTTPResponse(t, response)
+			if readErr == nil && strings.Contains(string(body), "Startup scan completed.") {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("application did not install the final HTTP handler")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		targetURL+"assets/00000000000000000000000000000000/open",
+		strings.NewReader("csrf_token="+token),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", strings.TrimSuffix(targetURL, "/"))
+	request.AddCookie(cookie)
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeHTTPResponse(t, response)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST after handler update = %d, want %d", response.StatusCode, http.StatusNotFound)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		stopped = true
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("application did not shut down")
 	}
 }
 
@@ -199,12 +317,31 @@ type staticCodexStarter struct {
 	err error
 }
 
+type blockingCodexStarter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
 func (c staticCodexStarter) Start(
 	context.Context,
 	codex.AnalyzerConfig,
 	codex.AttemptRecorder,
 ) (codex.Runtime, error) {
 	return nil, c.err
+}
+
+func (starter *blockingCodexStarter) Start(
+	ctx context.Context,
+	_ codex.AnalyzerConfig,
+	_ codex.AttemptRecorder,
+) (codex.Runtime, error) {
+	close(starter.started)
+	select {
+	case <-starter.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (l *recordingLauncher) Open(_ context.Context, targetURL string) error {
@@ -229,6 +366,13 @@ func availablePort(t *testing.T) int {
 	}
 
 	return port
+}
+
+func closeHTTPResponse(t *testing.T, response *http.Response) {
+	t.Helper()
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("closing HTTP response: %v", err)
+	}
 }
 
 func writeApplicationConfig(t *testing.T, root string, cfg config.Config) {
