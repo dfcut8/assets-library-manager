@@ -31,6 +31,13 @@
     {{end}}
   </div>
   {{else}}<p class="empty">No ready assets match these filters.</p>{{end}}
+  {{if gt .Results.TotalPages 1}}
+  <nav class="pagination" aria-label="Catalog pages">
+    {{if .Pagination.PreviousURL}}<a class="button pagination-link" href="{{.Pagination.PreviousURL}}" hx-get="{{.Pagination.PreviousURL}}" hx-target="#catalog-results" hx-swap="outerHTML" hx-push-url="true">Previous</a>{{else}}<span></span>{{end}}
+    <span class="pagination-status">Page {{.Results.Page}} of {{.Results.TotalPages}}</span>
+    {{if .Pagination.NextURL}}<a class="button pagination-link" href="{{.Pagination.NextURL}}" hx-get="{{.Pagination.NextURL}}" hx-target="#catalog-results" hx-swap="outerHTML" hx-push-url="true">Next</a>{{else}}<span></span>{{end}}
+  </nav>
+  {{end}}
 </section>
 {{end}}
 

@@ -148,6 +148,63 @@ func TestCatalogControlsUpdateAutomaticallyAndPreserveQuery(t *testing.T) {
 	}
 }
 
+func TestCatalogPaginationPreservesFiltersAndSupportsHTMX(t *testing.T) {
+	catalogService := &pagedCatalog{}
+	handler, _ := newTestHandlerWithCatalog(t, catalogService)
+	page := requestCatalogPage(
+		t,
+		handler,
+		"/assets?q=blue&sort=title&type=character&page_size=48&page=2",
+	)
+
+	if page.Code != http.StatusOK {
+		t.Fatalf("catalog pagination response = %d %q", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	if !strings.Contains(body, `<nav class="pagination" aria-label="Catalog pages">`) ||
+		!strings.Contains(body, `Page 2 of 4`) {
+		t.Fatalf("catalog pagination status is missing: %q", body)
+	}
+	for _, link := range []string{
+		`href="/assets?page=1&amp;page_size=48&amp;q=blue&amp;sort=title&amp;type=character"`,
+		`href="/assets?page=3&amp;page_size=48&amp;q=blue&amp;sort=title&amp;type=character"`,
+	} {
+		if !strings.Contains(body, link) {
+			t.Fatalf("catalog pagination does not preserve query in %q: %q", link, body)
+		}
+	}
+	if strings.Count(body, `hx-target="#catalog-results"`) < 3 ||
+		strings.Count(body, `hx-push-url="true"`) < 3 {
+		t.Fatalf("catalog pagination does not support HTMX navigation: %q", body)
+	}
+	firstPage := requestCatalogPage(t, handler, "/assets?page=1")
+	if strings.Contains(firstPage.Body.String(), ">Previous</a>") ||
+		!strings.Contains(firstPage.Body.String(), ">Next</a>") {
+		t.Fatalf("first catalog page has incorrect controls: %q", firstPage.Body.String())
+	}
+	lastPage := requestCatalogPage(t, handler, "/assets?page=4")
+	if !strings.Contains(lastPage.Body.String(), ">Previous</a>") ||
+		strings.Contains(lastPage.Body.String(), ">Next</a>") {
+		t.Fatalf("last catalog page has incorrect controls: %q", lastPage.Body.String())
+	}
+
+	nextRequest := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7342/assets?q=blue&sort=title&type=character&page_size=48&page=3",
+		nil,
+	)
+	nextRequest.Host = "127.0.0.1:7342"
+	nextRequest.Header.Set("HX-Request", "true")
+	nextPage := httptest.NewRecorder()
+	handler.ServeHTTP(nextPage, nextRequest)
+	if nextPage.Code != http.StatusOK || strings.Contains(nextPage.Body.String(), "<!doctype") {
+		t.Fatalf("HTMX pagination response = %d %q", nextPage.Code, nextPage.Body.String())
+	}
+	if catalogService.query.Page != 3 || catalogService.query.PageSize != 48 {
+		t.Fatalf("HTMX pagination query = %+v", catalogService.query)
+	}
+}
+
 func TestSecurityHeadersAndCSRF(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	wrongHost := request(t, handler, http.MethodGet, "/assets", "localhost:7342", nil)
@@ -310,6 +367,25 @@ func (fakeCatalog) UpdateSemanticMetadata(_ context.Context, id catalog.AssetID,
 type queryRecordingCatalog struct {
 	fakeCatalog
 	query catalog.AssetQuery
+}
+
+type pagedCatalog struct {
+	fakeCatalog
+	query catalog.AssetQuery
+}
+
+func (catalogService *pagedCatalog) Search(
+	ctx context.Context,
+	query catalog.AssetQuery,
+) (catalog.Page[catalog.AssetSummary], error) {
+	catalogService.query = query
+	page, err := catalogService.fakeCatalog.Search(ctx, query)
+	page.Page = query.Page
+	page.PageSize = query.PageSize
+	page.TotalItems = 145
+	page.TotalPages = 4
+
+	return page, err
 }
 
 func (catalogService *queryRecordingCatalog) Search(
