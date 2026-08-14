@@ -3,6 +3,7 @@
 package importer_test
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"image"
@@ -22,7 +23,7 @@ import (
 	"github.com/dfcut8/assets-library-manager/internal/storage"
 )
 
-func TestCoordinatorImportsAndDeduplicatesIdenticalLooseImages(t *testing.T) {
+func TestCoordinatorDeletesSuccessfullyProcessedLooseAndZIPSources(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -50,6 +51,11 @@ func TestCoordinatorImportsAndDeduplicatesIdenticalLooseImages(t *testing.T) {
 
 	writeTestPNG(t, filepath.Join(paths.Incoming, "a.png"))
 	writeTestPNG(t, filepath.Join(paths.Incoming, "b.PNG"))
+	imageData, err := os.ReadFile(filepath.Join(paths.Incoming, "a.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestZIP(t, filepath.Join(paths.Incoming, "c.zip"), "nested/c.png", imageData)
 	sourcePath, err := importer.NewSourcePath("a.png")
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +79,8 @@ func TestCoordinatorImportsAndDeduplicatesIdenticalLooseImages(t *testing.T) {
 	}
 
 	progress := coordinator.Snapshot()
-	if progress.Active || progress.ItemsReady != 1 || progress.ItemsDuplicate != 1 ||
-		progress.SourcesDeleted != 2 || progress.SourcesRetained != 0 {
+	if progress.Active || progress.ItemsReady != 1 || progress.ItemsDuplicate != 2 ||
+		progress.SourcesDeleted != 3 || progress.SourcesRetained != 0 {
 		t.Fatalf("progress = %#v", progress)
 	}
 	if got := analyzer.calls.Load(); got != 1 {
@@ -88,7 +94,7 @@ func TestCoordinatorImportsAndDeduplicatesIdenticalLooseImages(t *testing.T) {
 	if err != nil || !matches {
 		t.Fatalf("managed verification = %v, %v", matches, err)
 	}
-	for _, name := range []string{"a.png", "b.PNG"} {
+	for _, name := range []string{"a.png", "b.PNG", "c.zip"} {
 		if _, err := os.Stat(filepath.Join(paths.Incoming, name)); !os.IsNotExist(err) {
 			t.Fatalf("source %q still exists: %v", name, err)
 		}
@@ -179,5 +185,29 @@ func writeTestPNG(t *testing.T, filePath string) {
 	}
 	if closeErr != nil {
 		t.Fatal(closeErr)
+	}
+}
+
+func writeTestZIP(t *testing.T, filePath, entryName string, data []byte) {
+	t.Helper()
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	entry, err := archive.Create(entryName)
+	if err == nil {
+		_, err = entry.Write(data)
+	}
+	archiveCloseErr := archive.Close()
+	fileCloseErr := file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archiveCloseErr != nil {
+		t.Fatal(archiveCloseErr)
+	}
+	if fileCloseErr != nil {
+		t.Fatal(fileCloseErr)
 	}
 }
