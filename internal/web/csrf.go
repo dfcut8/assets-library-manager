@@ -43,8 +43,8 @@ func (protection csrfProtection) protect(next http.Handler) http.Handler {
 }
 
 func postBodyLimit(path string) int64 {
-	if strings.HasSuffix(path, "/reveal") {
-		return revealBodyLimit
+	if strings.HasSuffix(path, "/open") || strings.HasSuffix(path, "/reveal") {
+		return fileActionBodyLimit
 	}
 
 	return metadataBodyLimit

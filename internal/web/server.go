@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	metadataBodyLimit = 64 << 10
-	revealBodyLimit   = 8 << 10
-	requestTimeout    = 10 * time.Second
+	metadataBodyLimit   = 64 << 10
+	fileActionBodyLimit = 8 << 10
+	requestTimeout      = 10 * time.Second
 )
 
 //go:embed templates/*.html static/*
@@ -55,8 +55,9 @@ type ManagedOpener interface {
 	OpenManaged(importer.ManagedPath) (*os.File, error)
 }
 
-// FileRevealer opens one trusted managed file in the platform file manager.
-type FileRevealer interface {
+// FileLauncher opens one trusted managed file in its viewer or file manager.
+type FileLauncher interface {
+	Open(context.Context, string) error
 	Reveal(context.Context, string) error
 }
 
@@ -66,7 +67,7 @@ type Dependencies struct {
 	Catalog    CatalogService
 	Processing ProcessingReader
 	Managed    ManagedOpener
-	Revealer   FileRevealer
+	Files      FileLauncher
 	CSRFSecret []byte
 }
 
@@ -75,7 +76,7 @@ func New(allowedHost string, dependencies Dependencies) (http.Handler, error) {
 	if allowedHost == "" {
 		return nil, errors.New("creating web server: allowed host is empty")
 	}
-	if dependencies.Catalog == nil || dependencies.Managed == nil || dependencies.Revealer == nil {
+	if dependencies.Catalog == nil || dependencies.Managed == nil || dependencies.Files == nil {
 		return nil, errors.New("creating web server: dependencies are incomplete")
 	}
 	page, err := template.New("pages").Funcs(template.FuncMap{
@@ -113,6 +114,7 @@ func New(allowedHost string, dependencies Dependencies) (http.Handler, error) {
 	mux.HandleFunc("GET /assets/{id}/thumbnail", server.thumbnail)
 	mux.HandleFunc("GET /assets/{id}/download", server.download)
 	mux.HandleFunc("POST /assets/{id}/metadata", server.metadata)
+	mux.HandleFunc("POST /assets/{id}/open", server.view)
 	mux.HandleFunc("POST /assets/{id}/reveal", server.reveal)
 	mux.HandleFunc("GET /processing", server.processing)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFiles))))

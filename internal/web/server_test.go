@@ -60,6 +60,17 @@ func TestCatalogRoutesRenderAndRespectHTMX(t *testing.T) {
 			t.Fatalf("detail does not group tags with markup %q: %q", tagGroupMarkup, detail.Body.String())
 		}
 	}
+	for _, explorerMarkup := range []string{
+		`action="/assets/` + testAssetID + `/open"`,
+		`Open in default viewer`,
+		`action="/assets/` + testAssetID + `/reveal"`,
+		`class="action-link"`,
+		`Open in file explorer`,
+	} {
+		if !strings.Contains(detail.Body.String(), explorerMarkup) {
+			t.Fatalf("detail does not include file explorer action %q: %q", explorerMarkup, detail.Body.String())
+		}
+	}
 }
 
 func TestGroupTagsPreservesFacetAndTagOrder(t *testing.T) {
@@ -165,7 +176,7 @@ func TestSecurityHeadersAndCSRF(t *testing.T) {
 	}
 }
 
-func TestThumbnailDownloadAndReveal(t *testing.T) {
+func TestThumbnailDownloadOpenAndReveal(t *testing.T) {
 	handler, dependencies := newTestHandler(t)
 	thumbnail := request(t, handler, http.MethodGet, "/assets/"+testAssetID+"/thumbnail", "127.0.0.1:7342", nil)
 	if thumbnail.Code != http.StatusOK || thumbnail.Header().Get("Content-Type") != "image/png" || !bytes.Equal(thumbnail.Body.Bytes(), []byte("thumbnail")) {
@@ -178,9 +189,13 @@ func TestThumbnailDownloadAndReveal(t *testing.T) {
 	page := request(t, handler, http.MethodGet, "/assets/"+testAssetID, "127.0.0.1:7342", nil)
 	cookie := page.Result().Cookies()[0]
 	token := csrfTokenFromHTML(t, page.Body.String())
+	open, _ := postRequest(handler, "/assets/"+testAssetID+"/open", "csrf_token="+token, cookie, "http://127.0.0.1:7342")
+	if open.Code != http.StatusSeeOther || dependencies.files.openedPath == "" {
+		t.Fatalf("open = %d %q", open.Code, dependencies.files.openedPath)
+	}
 	reveal, _ := postRequest(handler, "/assets/"+testAssetID+"/reveal", "csrf_token="+token, cookie, "http://127.0.0.1:7342")
-	if reveal.Code != http.StatusSeeOther || dependencies.revealer.path == "" {
-		t.Fatalf("reveal = %d %q", reveal.Code, dependencies.revealer.path)
+	if reveal.Code != http.StatusSeeOther || dependencies.files.revealedPath == "" {
+		t.Fatalf("reveal = %d %q", reveal.Code, dependencies.files.revealedPath)
 	}
 }
 
@@ -217,7 +232,7 @@ func csrfTokenFromHTML(t *testing.T, body string) string {
 }
 
 type testDependencies struct {
-	revealer *fakeRevealer
+	files *fakeFileLauncher
 }
 
 func newTestHandler(t *testing.T) (http.Handler, testDependencies) {
@@ -233,16 +248,16 @@ func newTestHandlerWithCatalog(t *testing.T, catalogService CatalogService) (htt
 	if err := os.WriteFile(path, []byte("original bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	revealer := &fakeRevealer{}
+	files := &fakeFileLauncher{}
 	handler, err := New("127.0.0.1:7342", Dependencies{
 		Status: Status{CodexState: codex.StateReady, CodexPlan: "plus"}, Catalog: catalogService,
-		Managed: fakeManaged{path: path}, Revealer: revealer, CSRFSecret: bytes.Repeat([]byte{1}, 32),
+		Managed: fakeManaged{path: path}, Files: files, CSRFSecret: bytes.Repeat([]byte{1}, 32),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return handler, testDependencies{revealer: revealer}
+	return handler, testDependencies{files: files}
 }
 
 func requestCatalogPage(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
@@ -315,10 +330,18 @@ func (managed fakeManaged) OpenManaged(value importer.ManagedPath) (*os.File, er
 	return os.Open(managed.path)
 }
 
-type fakeRevealer struct{ path string }
+type fakeFileLauncher struct {
+	openedPath   string
+	revealedPath string
+}
 
-func (reveal *fakeRevealer) Reveal(_ context.Context, path string) error {
-	reveal.path = path
+func (launcher *fakeFileLauncher) Open(_ context.Context, path string) error {
+	launcher.openedPath = path
+	return nil
+}
+
+func (launcher *fakeFileLauncher) Reveal(_ context.Context, path string) error {
+	launcher.revealedPath = path
 	return nil
 }
 
