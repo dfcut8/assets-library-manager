@@ -29,11 +29,17 @@ type pageData struct {
 	CSRFToken  string
 	Query      catalog.AssetQuery
 	Results    catalog.Page[catalog.AssetSummary]
+	Pagination paginationView
 	Detail     *catalog.AssetDetail
 	Processing importer.Progress
 	Form       metadataForm
 	Message    string
 	Errors     map[string]string
+}
+
+type paginationView struct {
+	PreviousURL string
+	NextURL     string
 }
 
 type metadataForm struct {
@@ -65,7 +71,7 @@ func (s *server) catalog(w http.ResponseWriter, r *http.Request) {
 	}
 	data := pageData{
 		Status: s.dependencies.Status, CSRFToken: csrfToken(r.Context()), Query: query,
-		Results: results, Processing: s.snapshot(),
+		Results: results, Pagination: catalogPagination(r, results), Processing: s.snapshot(),
 	}
 	if isHTMX(r) {
 		s.render(w, "catalog-results", data)
@@ -85,7 +91,9 @@ func (s *server) catalogFragment(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusInternalServerError, "Unable to load the catalog.")
 		return
 	}
-	s.render(w, "catalog-results", pageData{Query: query, Results: results})
+	s.render(w, "catalog-results", pageData{
+		Query: query, Results: results, Pagination: catalogPagination(r, results),
+	})
 }
 
 func (s *server) detail(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +301,35 @@ func (s *server) search(r *http.Request, query catalog.AssetQuery) (catalog.Page
 	defer cancel()
 
 	return s.dependencies.Catalog.Search(ctx, query)
+}
+
+func catalogPagination(
+	r *http.Request,
+	results catalog.Page[catalog.AssetSummary],
+) paginationView {
+	if results.TotalPages <= 1 {
+		return paginationView{}
+	}
+
+	pagination := paginationView{}
+	if results.Page > 1 {
+		pagination.PreviousURL = catalogPageURL(r.URL.Query(), results.Page-1)
+	}
+	if results.Page < results.TotalPages {
+		pagination.NextURL = catalogPageURL(r.URL.Query(), results.Page+1)
+	}
+
+	return pagination
+}
+
+func catalogPageURL(values url.Values, page int) string {
+	pageValues := make(url.Values, len(values))
+	for key, entries := range values {
+		pageValues[key] = append([]string(nil), entries...)
+	}
+	pageValues.Set("page", strconv.Itoa(page))
+
+	return "/assets?" + pageValues.Encode()
 }
 
 func (s *server) loadDetail(w http.ResponseWriter, r *http.Request) (catalog.AssetDetail, bool) {
