@@ -45,7 +45,7 @@ func TestCatalogRoutesRenderAndRespectHTMX(t *testing.T) {
 	}
 }
 
-func TestCatalogControlsApplyAndPreserveQuery(t *testing.T) {
+func TestCatalogControlsUpdateAutomaticallyAndPreserveQuery(t *testing.T) {
 	catalogService := &queryRecordingCatalog{}
 	handler, _ := newTestHandlerWithCatalog(t, catalogService)
 	request := httptest.NewRequest(
@@ -81,6 +81,18 @@ func TestCatalogControlsApplyAndPreserveQuery(t *testing.T) {
 	}
 	if !strings.Contains(page.Body.String(), `hx-get="/assets"`) || !strings.Contains(page.Body.String(), `hx-swap="outerHTML"`) {
 		t.Fatalf("catalog form does not use the canonical URL and outer swap: %q", page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), `hx-trigger="input changed delay:300ms from:input[name='q'], change from:select[name='sort']"`) ||
+		!strings.Contains(page.Body.String(), `hx-sync="this:replace"`) {
+		t.Fatalf("catalog controls do not apply automatically: %q", page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), `class="search-filter"`) || !strings.Contains(page.Body.String(), `autofocus`) {
+		t.Fatalf("search is not the primary catalog control: %q", page.Body.String())
+	}
+	for _, removedControl := range []string{`name="type"`, `name="style"`, "Apply filters"} {
+		if strings.Contains(page.Body.String(), removedControl) {
+			t.Fatalf("catalog page still contains removed control %q: %q", removedControl, page.Body.String())
+		}
 	}
 }
 
