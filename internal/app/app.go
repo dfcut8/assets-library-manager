@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -108,12 +109,18 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 	webStatus := web.Status{CodexState: codex.StateUnavailable,
 		Database: cfg.Storage.Database, Incoming: cfg.Storage.IncomingDirectory,
 		Processed: cfg.Storage.ProcessedDirectory}
+	csrfSecret := make([]byte, 32)
+	if _, err := rand.Read(csrfSecret); err != nil {
+		return fmt.Errorf("creating csrf secret: %w", err)
+	}
 
 	address := net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port))
-	handler, err := web.New(address, web.Dependencies{
+	webDependencies := web.Dependencies{
 		Status:  webStatus,
 		Catalog: catalogService, Processing: recovery, Managed: store, Files: a.files,
-	})
+		CSRFSecret: csrfSecret,
+	}
+	handler, err := web.New(address, webDependencies)
 	if err != nil {
 		return err
 	}
@@ -154,10 +161,8 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 		status := analyzer.Status()
 		webStatus.CodexState = status.State
 		webStatus.CodexPlan = status.PlanType
-		updatedHandler, handlerErr := web.New(address, web.Dependencies{
-			Status:  webStatus,
-			Catalog: catalogService, Processing: recovery, Managed: store, Files: a.files,
-		})
+		webDependencies.Status = webStatus
+		updatedHandler, handlerErr := web.New(address, webDependencies)
 		if handlerErr != nil {
 			return errors.Join(
 				handlerErr,
@@ -182,10 +187,9 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 			analyzerCloseErr,
 		)
 	}
-	updatedHandler, handlerErr := web.New(address, web.Dependencies{
-		Status:  webStatus,
-		Catalog: catalogService, Processing: coordinator, Managed: store, Files: a.files,
-	})
+	webDependencies.Status = webStatus
+	webDependencies.Processing = coordinator
+	updatedHandler, handlerErr := web.New(address, webDependencies)
 	if handlerErr != nil {
 		var analyzerCloseErr error
 		if analyzer != nil {
