@@ -158,7 +158,7 @@ Do not back up only `assets.db` while the process is running; WAL data may not y
 
 Prerequisites:
 
-- Go 1.26.5 or newer within the Go 1.26 line. The module toolchain directive can download the pinned patch automatically when Go toolchain switching is enabled.
+- Go 1.26.6 or newer within the Go 1.26 line. The module toolchain directive can download the pinned patch automatically when Go toolchain switching is enabled.
 - Git.
 - `golangci-lint` v2 for linting.
 - `govulncheck` for the vulnerability gate.

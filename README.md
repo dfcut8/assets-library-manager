@@ -22,7 +22,7 @@ See [Running and operations](docs/running.md) for platform commands, generated f
 
 ## Develop from source
 
-Prerequisites: Go 1.26.5 or newer within the Go 1.26 line, and Git. Then run:
+Prerequisites: Go 1.26.6 or newer within the Go 1.26 line, and Git. Then run:
 
 ```sh
 go mod download

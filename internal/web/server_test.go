@@ -168,6 +168,8 @@ type testDependencies struct {
 }
 
 func newTestHandler(t *testing.T) (http.Handler, testDependencies) {
+	t.Helper()
+
 	return newTestHandlerWithCatalog(t, fakeCatalog{})
 }
 
