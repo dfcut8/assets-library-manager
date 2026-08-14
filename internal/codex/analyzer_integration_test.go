@@ -29,7 +29,7 @@ func TestAnalyzer_AnalyzeInstalledCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 	analyzer, err := StartAnalyzer(t.Context(), AnalyzerConfig{
-		Command: "codex", Model: "gpt-5.6-terra", WorkingDirectory: workingDirectory,
+		Command: "codex", Model: "gpt-5.6-luna", WorkingDirectory: workingDirectory,
 		ReasoningEffort: "medium", TurnTimeout: 90 * time.Second,
 		MaxAttempts: 1, InitialRetryDelay: time.Millisecond,
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),

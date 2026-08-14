@@ -300,7 +300,7 @@ Repository errors must expose not-found and conflict semantics through `errors.I
   },
   "codex": {
     "command": "codex",
-    "model": "gpt-5.6-terra",
+    "model": "gpt-5.6-luna",
     "reasoning_effort": "medium",
     "startup_timeout_seconds": 10,
     "turn_timeout_seconds": 90,
