@@ -19,6 +19,7 @@ import (
 	"github.com/dfcut8/assets-library-manager/internal/codex"
 	"github.com/dfcut8/assets-library-manager/internal/config"
 	"github.com/dfcut8/assets-library-manager/internal/platform"
+	"github.com/dfcut8/assets-library-manager/internal/sqlite"
 	"github.com/dfcut8/assets-library-manager/internal/storage"
 )
 
@@ -60,6 +61,78 @@ func TestRunBootstrapsServesLaunchesAndShutsDown(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "assets.db")); err != nil {
 		t.Fatalf("database not created: %v", err)
+	}
+}
+
+func TestRunCleansPreviousStagingEntries(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Server.Port = availablePort(t)
+	writeApplicationConfig(t, root, cfg)
+	paths, err := storage.Prepare(root, cfg.Storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := sqlite.Open(context.Background(), paths.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []string{
+		filepath.Join(paths.Staging, "previous-run.txt"),
+		filepath.Join(paths.Staging, "11111111111111111111111111111111.scratch", "analysis.png"),
+		filepath.Join(paths.AnalysisWorkspace, "previous-run", "artifact.txt"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(entry, []byte("leftover"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	launcher := &recordingLauncher{called: make(chan string, 1)}
+	application := New(
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		launcher,
+		platform.Revealer{},
+		staticCodexStarter{},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- application.Run(ctx, root)
+	}()
+	select {
+	case <-launcher.called:
+		cancel()
+	case <-time.After(10 * time.Second):
+		cancel()
+		t.Fatal("application did not reach browser launch")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("application did not shut down")
+	}
+	entries, err := os.ReadDir(paths.Staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != ".codex-analysis" {
+		t.Fatalf("staging entries = %v, want empty analysis workspace only", entries)
+	}
+	workspaceEntries, err := os.ReadDir(paths.AnalysisWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaceEntries) != 0 {
+		t.Fatalf("analysis workspace entries = %v, want empty", workspaceEntries)
 	}
 }
 

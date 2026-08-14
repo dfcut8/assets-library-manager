@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"time"
 
 	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
@@ -371,15 +370,11 @@ func (s *Store) DeleteIncoming(
 	return nil
 }
 
-// CleanOrphanStaging removes only old, regular, correctly named, unreferenced staging files.
-func (s *Store) CleanOrphanStaging(
-	ctx context.Context,
-	referenced []importer.StagedPath,
-	olderThan time.Time,
-) ([]importer.StagedPath, error) {
+// CleanStaging removes previous-run entries except staged originals still referenced by SQLite.
+func (s *Store) CleanStaging(ctx context.Context, referenced []importer.StagedPath) error {
 	entries, err := fs.ReadDir(s.staging.FS(), ".")
 	if err != nil {
-		return nil, fmt.Errorf("reading staging root: %w", err)
+		return fmt.Errorf("reading staging root: %w", err)
 	}
 	referencedNames := make([]string, 0, len(referenced))
 	for _, stagedPath := range referenced {
@@ -387,30 +382,23 @@ func (s *Store) CleanOrphanStaging(
 	}
 	slices.Sort(referencedNames)
 
-	removed := make([]importer.StagedPath, 0)
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return removed, fmt.Errorf("cleaning orphan staging files: %w", err)
+			return fmt.Errorf("cleaning staging root: %w", err)
 		}
-		stagedPath, parseErr := importer.ParseStagedPath(entry.Name())
 		_, isReferenced := slices.BinarySearch(referencedNames, entry.Name())
-		if parseErr != nil || isReferenced {
+		if isReferenced {
 			continue
 		}
-		info, err := s.staging.Lstat(entry.Name())
-		if err != nil {
-			return removed, fmt.Errorf("stating staging entry: %w", err)
+		if err := s.staging.RemoveAll(entry.Name()); err != nil {
+			return fmt.Errorf("removing staging entry: %w", err)
 		}
-		if !info.Mode().IsRegular() || !info.ModTime().Before(olderThan) {
-			continue
-		}
-		if err := s.staging.Remove(entry.Name()); err != nil {
-			return removed, fmt.Errorf("removing orphan staging file: %w", err)
-		}
-		removed = append(removed, stagedPath)
+	}
+	if err := s.staging.Mkdir(".codex-analysis", 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("recreating analysis workspace: %w", err)
 	}
 
-	return removed, nil
+	return nil
 }
 
 // Close releases every root handle owned by the Store.

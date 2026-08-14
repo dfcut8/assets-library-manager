@@ -81,7 +81,7 @@ type ProcessingStore interface {
 	DeleteIncoming(context.Context, SourcePath, Digest, int64) error
 	CreateAnalysisScratch(ID, string, []byte) (ScratchImage, error)
 	RemoveAnalysisScratch(ID) error
-	CleanOrphanStaging(context.Context, []StagedPath, time.Time) ([]StagedPath, error)
+	CleanStaging(context.Context, []StagedPath) error
 }
 
 // ImageInspector validates images and creates derived renditions.

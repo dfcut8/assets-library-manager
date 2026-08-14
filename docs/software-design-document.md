@@ -549,7 +549,7 @@ Recovery runs before the new scan:
 - A staged database asset with its final file present is verified and marked ready.
 - A staged database asset with its staging file present resumes the atomic rename.
 - A staged database asset with neither file is marked failed; the source remains.
-- An orphan staging file without a database/import reference is removed only after its root-scoped relative path, regular-file type, naming pattern, and minimum age are validated.
+- After database-backed recovery, every unreferenced staging entry from the previous run is removed through the root-scoped filesystem API. Referenced staged originals are preserved, and the Codex analysis workspace is recreated empty.
 - A source marked ready-to-delete but still present is revalidated and deletion is retried.
 - A ready asset with a missing or digest-mismatched managed file is hidden from normal results and reported as integrity-failed; no source is deleted because of that row.
 

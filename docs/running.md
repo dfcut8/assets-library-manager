@@ -141,6 +141,8 @@ The refusal message explains that catalog metadata may have been lost and instru
 
 After initialization the server logs its URL to standard error and, by default, asks the operating system to open it. Stop the process with Ctrl+C or a normal termination signal; it drains HTTP, checkpoints WAL, and closes SQLite within the configured timeout.
 
+On each start, database-backed recovery runs before processing. Staged originals still referenced by SQLite are preserved for crash recovery; every other entry under `processed/.staging/` is removed, and the Codex analysis workspace is recreated empty.
+
 `--version` prints build information without creating configuration, directories, or a database.
 
 ## Backup and recovery

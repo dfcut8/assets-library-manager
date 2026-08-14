@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
@@ -207,11 +206,10 @@ func TestStoreDeleteIncomingRevalidatesFingerprint(t *testing.T) {
 	}
 }
 
-func TestStoreCleanOrphanStagingIsConservative(t *testing.T) {
+func TestStoreCleanStagingRemovesUnreferencedEntries(t *testing.T) {
 	t.Parallel()
 
 	store, paths := newTestStore(t)
-	old := time.Now().Add(-25 * time.Hour)
 	orphan := "33333333333333333333333333333333.stage"
 	referenced := "44444444444444444444444444444444.stage"
 	newFile := "55555555555555555555555555555555.stage"
@@ -221,27 +219,37 @@ func TestStoreCleanOrphanStagingIsConservative(t *testing.T) {
 		if err := os.WriteFile(absolute, []byte(name), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if name != newFile {
-			if err := os.Chtimes(absolute, old, old); err != nil {
-				t.Fatal(err)
-			}
+	}
+	for _, directory := range []string{
+		"66666666666666666666666666666666.scratch",
+		"unexpected-directory",
+		filepath.Join(".codex-analysis", "previous-run"),
+	} {
+		if err := os.MkdirAll(filepath.Join(paths.Staging, directory), 0o700); err != nil {
+			t.Fatal(err)
 		}
 	}
 	referencedPath, err := importer.ParseStagedPath(referenced)
 	if err != nil {
 		t.Fatal(err)
 	}
-	removed, err := store.CleanOrphanStaging(context.Background(), []importer.StagedPath{referencedPath}, time.Now().Add(-24*time.Hour))
+	if err := store.CleanStaging(context.Background(), []importer.StagedPath{referencedPath}); err != nil {
+		t.Fatalf("CleanStaging() error = %v", err)
+	}
+	entries, err := os.ReadDir(paths.Staging)
 	if err != nil {
-		t.Fatalf("CleanOrphanStaging() error = %v", err)
+		t.Fatal(err)
 	}
-	if len(removed) != 1 || removed[0].String() != orphan {
-		t.Fatalf("CleanOrphanStaging() removed %v", removed)
+	if len(entries) != 2 || entries[0].Name() != ".codex-analysis" ||
+		entries[1].Name() != referenced {
+		t.Fatalf("staging entries = %v, want workspace and referenced file", entries)
 	}
-	for _, name := range []string{referenced, newFile, invalid} {
-		if _, err := os.Stat(filepath.Join(paths.Staging, name)); err != nil {
-			t.Fatalf("protected file %q missing: %v", name, err)
-		}
+	workspaceEntries, err := os.ReadDir(filepath.Join(paths.Staging, ".codex-analysis"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaceEntries) != 0 {
+		t.Fatalf("analysis workspace entries = %v, want empty", workspaceEntries)
 	}
 }
 
