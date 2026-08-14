@@ -105,7 +105,7 @@ func Default() Config {
 		},
 		Codex: CodexConfig{
 			Command:               "codex",
-			Model:                 "gpt-5.6-terra",
+			Model:                 "gpt-5.6-luna",
 			ReasoningEffort:       "medium",
 			StartupTimeoutSeconds: 10,
 			TurnTimeoutSeconds:    90,
