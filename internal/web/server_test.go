@@ -45,6 +45,45 @@ func TestCatalogRoutesRenderAndRespectHTMX(t *testing.T) {
 	}
 }
 
+func TestCatalogControlsApplyAndPreserveQuery(t *testing.T) {
+	catalogService := &queryRecordingCatalog{}
+	handler, _ := newTestHandlerWithCatalog(t, catalogService)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://127.0.0.1:7342/assets?q=blue&type=character%2Cbuilding&style=Pixel+Art%2CPainted&sort=title",
+		nil,
+	)
+	request.Host = "127.0.0.1:7342"
+	request.Header.Set("HX-Request", "true")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("catalog controls response = %d %q", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "<!doctype") || !strings.Contains(response.Body.String(), `id="catalog-results"`) {
+		t.Fatalf("catalog controls did not return a results fragment: %q", response.Body.String())
+	}
+	query := catalogService.query
+	if query.Q != "blue" || query.Sort != catalog.SortTitle {
+		t.Fatalf("search and sort query = %+v", query)
+	}
+	if len(query.Types) != 2 || query.Types[0] != catalog.PrimaryTypeCharacter || query.Types[1] != catalog.PrimaryTypeBuilding {
+		t.Fatalf("type filters = %+v", query.Types)
+	}
+	if len(query.Styles) != 2 || query.Styles[0] != "Pixel Art" || query.Styles[1] != "Painted" {
+		t.Fatalf("style filters = %+v", query.Styles)
+	}
+
+	page := requestCatalogPage(t, handler, "/assets?sort=title")
+	if !strings.Contains(page.Body.String(), `<option value="title" selected>Title</option>`) {
+		t.Fatalf("selected sort was not preserved: %q", page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), `hx-get="/assets"`) || !strings.Contains(page.Body.String(), `hx-swap="outerHTML"`) {
+		t.Fatalf("catalog form does not use the canonical URL and outer swap: %q", page.Body.String())
+	}
+}
+
 func TestSecurityHeadersAndCSRF(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	wrongHost := request(t, handler, http.MethodGet, "/assets", "localhost:7342", nil)
@@ -130,6 +169,12 @@ type testDependencies struct {
 
 func newTestHandler(t *testing.T) (http.Handler, testDependencies) {
 	t.Helper()
+
+	return newTestHandlerWithCatalog(t, fakeCatalog{})
+}
+
+func newTestHandlerWithCatalog(t *testing.T, catalogService CatalogService) (http.Handler, testDependencies) {
+	t.Helper()
 	directory := t.TempDir()
 	path := filepath.Join(directory, "asset.png")
 	if err := os.WriteFile(path, []byte("original bytes"), 0o600); err != nil {
@@ -137,7 +182,7 @@ func newTestHandler(t *testing.T) (http.Handler, testDependencies) {
 	}
 	revealer := &fakeRevealer{}
 	handler, err := New("127.0.0.1:7342", Dependencies{
-		Status: Status{CodexState: codex.StateReady, CodexPlan: "plus"}, Catalog: fakeCatalog{},
+		Status: Status{CodexState: codex.StateReady, CodexPlan: "plus"}, Catalog: catalogService,
 		Managed: fakeManaged{path: path}, Revealer: revealer, CSRFSecret: bytes.Repeat([]byte{1}, 32),
 	})
 	if err != nil {
@@ -145,6 +190,12 @@ func newTestHandler(t *testing.T) (http.Handler, testDependencies) {
 	}
 
 	return handler, testDependencies{revealer: revealer}
+}
+
+func requestCatalogPage(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return request(t, handler, http.MethodGet, path, "127.0.0.1:7342", nil)
 }
 
 type fakeCatalog struct{}
@@ -172,6 +223,20 @@ func (fakeCatalog) UpdateSemanticMetadata(_ context.Context, id catalog.AssetID,
 		return catalog.AssetDetail{}, &catalog.ValidationError{Fields: map[string]string{"title": "required"}}
 	}
 	return fakeCatalog{}.Get(context.Background(), id)
+}
+
+type queryRecordingCatalog struct {
+	fakeCatalog
+	query catalog.AssetQuery
+}
+
+func (catalogService *queryRecordingCatalog) Search(
+	_ context.Context,
+	query catalog.AssetQuery,
+) (catalog.Page[catalog.AssetSummary], error) {
+	catalogService.query = query
+
+	return catalogService.fakeCatalog.Search(context.Background(), query)
 }
 
 type fakeManaged struct{ path string }

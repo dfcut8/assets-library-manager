@@ -93,11 +93,12 @@ func buildCatalogFilter(
 		where, args = appendInFilter(where, args, "a.primary_type", values)
 	}
 	if len(query.Styles) > 0 {
-		values := make([]any, 0, len(query.Styles))
+		parts := make([]string, 0, len(query.Styles))
 		for _, value := range query.Styles {
-			values = append(values, value)
+			parts = append(parts, "instr(replace(lower(a.style), '-', ' '), replace(lower(?), '-', ' ')) > 0")
+			args = append(args, value)
 		}
-		where, args = appendInFilter(where, args, "a.style COLLATE NOCASE", values)
+		where = append(where, "("+strings.Join(parts, " OR ")+")")
 	}
 	if len(query.Orientations) > 0 {
 		where, args = appendStringInFilter(where, args, "a.orientation_class", query.Orientations)

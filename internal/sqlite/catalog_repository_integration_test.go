@@ -21,7 +21,7 @@ func TestCatalogRepositorySearchFiltersPagesAndExcludesNonReadyAssets(t *testing
 	castleID := catalogAssetID(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	insertCatalogFixture(t, database, catalogFixture{
 		ID: knightID, DigestByte: 1, Title: "Blue Knight", Description: "A heroic knight.",
-		PrimaryType: catalog.PrimaryTypeCharacter, Style: "Pixel Art",
+		PrimaryType: catalog.PrimaryTypeCharacter, Style: "Retro Pixel-Art",
 		Width: 64, Height: 32, Format: "png", PixelArt: true, Transparency: true,
 		State: "ready", ImportedAt: baseTime.Add(time.Hour),
 	})
