@@ -52,6 +52,15 @@ func TestCatalogRoutesRenderAndRespectHTMX(t *testing.T) {
 			t.Fatalf("detail does not include asset preview markup %q: %q", previewMarkup, detail.Body.String())
 		}
 	}
+	for _, explorerMarkup := range []string{
+		`action="/assets/` + testAssetID + `/reveal"`,
+		`class="action-link"`,
+		`Open in file explorer`,
+	} {
+		if !strings.Contains(detail.Body.String(), explorerMarkup) {
+			t.Fatalf("detail does not include file explorer action %q: %q", explorerMarkup, detail.Body.String())
+		}
+	}
 }
 
 func TestCatalogControlsUpdateAutomaticallyAndPreserveQuery(t *testing.T) {
