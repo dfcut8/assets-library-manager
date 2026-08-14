@@ -28,8 +28,9 @@ type URLLauncher interface {
 	Open(ctx context.Context, targetURL string) error
 }
 
-// FileRevealer opens a trusted managed original in the platform file manager.
-type FileRevealer interface {
+// FileLauncher opens a trusted managed original in its viewer or file manager.
+type FileLauncher interface {
+	Open(context.Context, string) error
 	Reveal(context.Context, string) error
 }
 
@@ -42,13 +43,13 @@ type AnalyzerStarter interface {
 type Application struct {
 	logger   *slog.Logger
 	launcher URLLauncher
-	revealer FileRevealer
+	files    FileLauncher
 	codex    AnalyzerStarter
 }
 
 // New constructs an application with explicit process-level dependencies.
-func New(logger *slog.Logger, launcher URLLauncher, revealer FileRevealer, starter AnalyzerStarter) *Application {
-	return &Application{logger: logger, launcher: launcher, revealer: revealer, codex: starter}
+func New(logger *slog.Logger, launcher URLLauncher, files FileLauncher, starter AnalyzerStarter) *Application {
+	return &Application{logger: logger, launcher: launcher, files: files, codex: starter}
 }
 
 // ExecutableRoot returns the canonical directory containing the running executable.
@@ -111,7 +112,7 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 	address := net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port))
 	handler, err := web.New(address, web.Dependencies{
 		Status:  webStatus,
-		Catalog: catalogService, Processing: recovery, Managed: store, Revealer: a.revealer,
+		Catalog: catalogService, Processing: recovery, Managed: store, Files: a.files,
 	})
 	if err != nil {
 		return err
@@ -155,7 +156,7 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 		webStatus.CodexPlan = status.PlanType
 		updatedHandler, handlerErr := web.New(address, web.Dependencies{
 			Status:  webStatus,
-			Catalog: catalogService, Processing: recovery, Managed: store, Revealer: a.revealer,
+			Catalog: catalogService, Processing: recovery, Managed: store, Files: a.files,
 		})
 		if handlerErr != nil {
 			return errors.Join(
@@ -183,7 +184,7 @@ func (a *Application) Run(ctx context.Context, root string) (returnErr error) {
 	}
 	updatedHandler, handlerErr := web.New(address, web.Dependencies{
 		Status:  webStatus,
-		Catalog: catalogService, Processing: coordinator, Managed: store, Revealer: a.revealer,
+		Catalog: catalogService, Processing: coordinator, Managed: store, Files: a.files,
 	})
 	if handlerErr != nil {
 		var analyzerCloseErr error
