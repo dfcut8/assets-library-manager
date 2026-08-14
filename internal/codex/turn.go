@@ -44,6 +44,14 @@ type completedTurnParams struct {
 	} `json:"turn"`
 }
 
+type tokenUsageUpdatedParams struct {
+	ThreadID   string `json:"threadId"`
+	TurnID     string `json:"turnId"`
+	TokenUsage struct {
+		Total json.RawMessage `json:"total"`
+	} `json:"tokenUsage"`
+}
+
 func (analyzer *Analyzer) analyzeOnce(
 	ctx context.Context,
 	input ImageInput,
@@ -174,6 +182,17 @@ func waitForTurn(
 			return "", usageJSON, classifyTransportError(err)
 		case event := <-collector.messages:
 			switch event.Method {
+			case "thread/tokenUsage/updated":
+				var params tokenUsageUpdatedParams
+				if err := json.Unmarshal(event.Params, &params); err != nil {
+					return "", usageJSON, invalidResponse("Codex returned malformed token usage", err)
+				}
+				if params.ThreadID != threadID || params.TurnID != turnID {
+					continue
+				}
+				if usage := safeUsageJSON(params.TokenUsage.Total); usage != "" {
+					usageJSON = usage
+				}
 			case "item/completed":
 				var params completedItemParams
 				if err := json.Unmarshal(event.Params, &params); err != nil {
@@ -196,7 +215,9 @@ func waitForTurn(
 				if params.ThreadID != threadID || params.Turn.ID != turnID {
 					continue
 				}
-				usageJSON = safeUsageJSON(params.Turn.TokenUsage)
+				if legacyUsage := safeUsageJSON(params.Turn.TokenUsage); legacyUsage != "" {
+					usageJSON = legacyUsage
+				}
 				if params.Turn.Status != "completed" {
 					if params.Turn.Error == nil {
 						return "", usageJSON, classifyTurnFailure(params.Turn.Status, "")

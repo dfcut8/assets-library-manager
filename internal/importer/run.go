@@ -20,12 +20,14 @@ type workItem struct {
 }
 
 type itemResult struct {
-	sourceID ID
-	path     SourcePath
-	itemName string
-	state    ItemState
-	code     ErrorCode
-	message  string
+	sourceID   ID
+	itemID     ID
+	path       SourcePath
+	itemName   string
+	state      ItemState
+	code       ErrorCode
+	message    string
+	tokenUsage TokenUsage
 }
 
 type sourceRun struct {
@@ -58,7 +60,7 @@ func (coordinator *Coordinator) Run(ctx context.Context) error {
 	})
 	discovery, err := Discover(ctx, coordinator.store)
 	if err != nil {
-		coordinator.completeProgress()
+		coordinator.completeProgress(ctx, "failed")
 		return err
 	}
 	coordinator.updateProgress(func(progress *Progress) {
@@ -98,7 +100,7 @@ func (coordinator *Coordinator) Run(ctx context.Context) error {
 		}
 		source.pending--
 		pending--
-		coordinator.recordItemResult(result)
+		coordinator.recordItemResult(ctx, result)
 		if source.scanDone && source.pending == 0 {
 			coordinator.finalizeSource(ctx, source)
 		}
@@ -158,7 +160,11 @@ func (coordinator *Coordinator) Run(ctx context.Context) error {
 		coordinator.StopReservations()
 	}
 	workers.Wait()
-	coordinator.completeProgress()
+	outcome := "completed"
+	if ctx.Err() != nil {
+		outcome = "canceled"
+	}
+	coordinator.completeProgress(ctx, outcome)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -359,8 +365,8 @@ func (coordinator *Coordinator) blockDiscoveredItem(
 		if err := coordinator.failItem(ctx, item, ErrorCodeCodexUnavailable, message); err != nil {
 			return err
 		}
-		coordinator.recordItemResult(itemResult{
-			sourceID: item.SourceID, path: sourcePath, itemName: item.ZIPEntryName,
+		coordinator.recordItemResult(ctx, itemResult{
+			sourceID: item.SourceID, itemID: item.ID, path: sourcePath, itemName: item.ZIPEntryName,
 			state: ItemStateFailed, code: ErrorCodeCodexUnavailable, message: message,
 		})
 
@@ -373,8 +379,8 @@ func (coordinator *Coordinator) blockDiscoveredItem(
 	}); err != nil {
 		return err
 	}
-	coordinator.recordItemResult(itemResult{
-		sourceID: item.SourceID, path: sourcePath, itemName: item.ZIPEntryName,
+	coordinator.recordItemResult(ctx, itemResult{
+		sourceID: item.SourceID, itemID: item.ID, path: sourcePath, itemName: item.ZIPEntryName,
 		state: ItemStateBlocked, code: ErrorCodeCodexUnavailable, message: message,
 	})
 
@@ -391,8 +397,8 @@ func (coordinator *Coordinator) failScannedItem(
 	if err := coordinator.failItem(ctx, item, code, message); err != nil {
 		return err
 	}
-	coordinator.recordItemResult(itemResult{
-		sourceID: item.SourceID, path: sourcePath, itemName: item.ZIPEntryName,
+	coordinator.recordItemResult(ctx, itemResult{
+		sourceID: item.SourceID, itemID: item.ID, path: sourcePath, itemName: item.ZIPEntryName,
 		state: ItemStateFailed, code: code, message: message,
 	})
 
@@ -424,7 +430,7 @@ func (coordinator *Coordinator) updateProgressForExisting(item ItemRecord) {
 	})
 }
 
-func (coordinator *Coordinator) recordItemResult(result itemResult) {
+func (coordinator *Coordinator) recordItemResult(ctx context.Context, result itemResult) {
 	coordinator.updateProgress(func(progress *Progress) {
 		switch result.state {
 		case ItemStateReady:
@@ -443,6 +449,24 @@ func (coordinator *Coordinator) recordItemResult(result itemResult) {
 			Code: result.code, Message: result.message,
 		})
 	}
+	coordinator.usageMu.Lock()
+	coordinator.cycleUsage.Add(result.tokenUsage)
+	coordinator.usageMu.Unlock()
+	coordinator.logger.InfoContext(
+		ctx,
+		"import item processing completed",
+		"source_id", result.sourceID,
+		"item_id", result.itemID,
+		"source", result.path,
+		"item", result.itemName,
+		"outcome", result.state,
+		"input_tokens", result.tokenUsage.InputTokens,
+		"cached_input_tokens", result.tokenUsage.CachedInputTokens,
+		"cache_write_input_tokens", result.tokenUsage.CacheWriteInputTokens,
+		"output_tokens", result.tokenUsage.OutputTokens,
+		"reasoning_output_tokens", result.tokenUsage.ReasoningOutputTokens,
+		"total_tokens", result.tokenUsage.TotalTokens,
+	)
 }
 
 func (coordinator *Coordinator) recordSourcePreparationFailure(
@@ -464,11 +488,30 @@ func (coordinator *Coordinator) recordSourcePreparationFailure(
 	})
 }
 
-func (coordinator *Coordinator) completeProgress() {
+func (coordinator *Coordinator) completeProgress(ctx context.Context, outcome string) {
+	completedAt := coordinator.now().UTC()
 	coordinator.updateProgress(func(progress *Progress) {
 		progress.Active = false
-		progress.CompletedAt = coordinator.now().UTC()
+		progress.CompletedAt = completedAt
 	})
+	progress := coordinator.Snapshot()
+	coordinator.usageMu.Lock()
+	usage := coordinator.cycleUsage
+	coordinator.usageMu.Unlock()
+	coordinator.logger.InfoContext(
+		ctx,
+		"startup import processing cycle completed",
+		"outcome", outcome,
+		"duration", completedAt.Sub(progress.StartedAt),
+		"sources_total", progress.SourcesTotal,
+		"items_total", progress.ItemsTotal,
+		"input_tokens", usage.InputTokens,
+		"cached_input_tokens", usage.CachedInputTokens,
+		"cache_write_input_tokens", usage.CacheWriteInputTokens,
+		"output_tokens", usage.OutputTokens,
+		"reasoning_output_tokens", usage.ReasoningOutputTokens,
+		"total_tokens", usage.TotalTokens,
+	)
 }
 
 func userSafeScanFailure(err error) string {

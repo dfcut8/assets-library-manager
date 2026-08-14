@@ -53,6 +53,10 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 		provenance.Run.AttemptNumber != 1 {
 		t.Fatalf("Analyze() provenance = %#v", provenance)
 	}
+	if provenance.TokenUsage.InputTokens != 10 || provenance.TokenUsage.OutputTokens != 20 ||
+		provenance.TokenUsage.TotalTokens != 30 {
+		t.Fatalf("Analyze() token usage = %#v", provenance.TokenUsage)
+	}
 	if len(recorder.runs()) != 0 {
 		t.Fatal("accepted attempt was recorded outside the atomic asset commit")
 	}
@@ -120,6 +124,20 @@ func TestAnalyzer_AnalyzeUsesRestrictedStructuredTurn(t *testing.T) {
 	if trace.count("thread/delete") != 0 {
 		t.Fatalf("ephemeral thread/delete count = %d, want 0", trace.count("thread/delete"))
 	}
+	initialize := trace.first(t, "initialize")
+	var initializeParams struct {
+		Capabilities struct {
+			OptOutNotificationMethods []string `json:"optOutNotificationMethods"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(initialize.Params, &initializeParams); err != nil {
+		t.Fatalf("decoding initialize params: %v", err)
+	}
+	for _, method := range initializeParams.Capabilities.OptOutNotificationMethods {
+		if method == "thread/tokenUsage/updated" {
+			t.Fatal("initialize opts out of token usage notifications")
+		}
+	}
 }
 
 func TestAnalyzer_AnalyzeRetriesInvalidResponseAndPersistsFailure(t *testing.T) {
@@ -149,6 +167,9 @@ func TestAnalyzer_AnalyzeRetriesInvalidResponseAndPersistsFailure(t *testing.T) 
 	}
 	if provenance.Run.AttemptNumber != 2 {
 		t.Fatalf("accepted attempt = %d, want 2", provenance.Run.AttemptNumber)
+	}
+	if provenance.TokenUsage.TotalTokens != 60 {
+		t.Fatalf("retry token usage = %#v, want 60 total tokens", provenance.TokenUsage)
 	}
 	runs := recorder.runs()
 	if len(runs) != 1 || runs[0].Outcome != "invalid-response" ||
@@ -187,7 +208,7 @@ func TestAnalyzer_AnalyzeDoesNotRetryRefusal(t *testing.T) {
 	}
 	defer closeAnalyzer(t, analyzer)
 
-	_, _, err = analyzer.Analyze(t.Context(), testImageInput(t))
+	_, provenance, err := analyzer.Analyze(t.Context(), testImageInput(t))
 	var classified *AnalysisError
 	if !errors.As(err, &classified) || classified.Kind != ErrorRefused || classified.Retryable {
 		t.Fatalf("Analyze() error = %#v", err)
@@ -198,6 +219,9 @@ func TestAnalyzer_AnalyzeDoesNotRetryRefusal(t *testing.T) {
 	}
 	if trace.count("turn/start") != 1 {
 		t.Fatalf("turn/start count = %d, want 1", trace.count("turn/start"))
+	}
+	if provenance.TokenUsage.TotalTokens != 30 {
+		t.Fatalf("failed analysis token usage = %#v, want 30 total tokens", provenance.TokenUsage)
 	}
 }
 
@@ -542,7 +566,18 @@ func turnReply(status, code, text string) fakeReply {
 			"threadId": "thread-1",
 			"turn": map[string]any{
 				"id": "turn-1", "status": status,
-				"tokenUsage": map[string]any{"inputTokens": 10, "outputTokens": 20},
+			},
+		},
+	}
+	usage := map[string]any{
+		"method": "thread/tokenUsage/updated",
+		"params": map[string]any{
+			"threadId": "thread-1", "turnId": "turn-1",
+			"tokenUsage": map[string]any{
+				"total": map[string]any{
+					"inputTokens": 10, "cachedInputTokens": 2, "cacheWriteInputTokens": 1,
+					"outputTokens": 20, "reasoningOutputTokens": 5, "totalTokens": 30,
+				},
 			},
 		},
 	}
@@ -554,7 +589,7 @@ func turnReply(status, code, text string) fakeReply {
 
 	return fakeReply{
 		Result: map[string]any{"turn": map[string]string{"id": "turn-1"}},
-		Events: []any{item, turn},
+		Events: []any{item, usage, turn},
 	}
 }
 

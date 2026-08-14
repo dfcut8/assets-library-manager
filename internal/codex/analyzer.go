@@ -187,6 +187,7 @@ func (analyzer *Analyzer) Analyze(
 	}
 
 	var lastErr error
+	var totalUsage importer.TokenUsage
 	for attempt := 1; attempt <= analyzer.config.MaxAttempts; attempt++ {
 		startedAt := analyzer.now().UTC()
 		runID, idErr := importer.NewID()
@@ -204,6 +205,7 @@ func (analyzer *Analyzer) Analyze(
 			ctx, input, localImagePath,
 		)
 		completedAt := analyzer.now().UTC()
+		totalUsage.Add(parseTokenUsage(usageJSON))
 		run.CompletedAt = &completedAt
 		run.Latency = completedAt.Sub(startedAt)
 		run.UsageJSON = usageJSON
@@ -212,7 +214,7 @@ func (analyzer *Analyzer) Analyze(
 			run.Outcome = "accepted"
 			run.NormalizedResultJSON = normalizedJSON
 
-			return result, AnalysisProvenance{Run: run}, nil
+			return result, AnalysisProvenance{Run: run, TokenUsage: totalUsage}, nil
 		}
 
 		classified := asAnalysisError(attemptErr)
@@ -230,22 +232,51 @@ func (analyzer *Analyzer) Analyze(
 		recordErr := analyzer.recorder.RecordAIRun(recordCtx, input.ItemID, input.AssetID, run)
 		recordCancel()
 		if recordErr != nil {
-			return AnalysisResult{}, AnalysisProvenance{},
+			return AnalysisResult{}, AnalysisProvenance{TokenUsage: totalUsage},
 				newAnalysisError(ErrorPermanent, "Could not persist analysis provenance", false, recordErr)
 		}
 		lastErr = classified
 		if ctx.Err() != nil {
-			return AnalysisResult{}, AnalysisProvenance{}, classified
+			return AnalysisResult{}, AnalysisProvenance{TokenUsage: totalUsage}, classified
 		}
 		if !classified.Retryable || attempt == analyzer.config.MaxAttempts {
-			return AnalysisResult{}, AnalysisProvenance{}, classified
+			return AnalysisResult{}, AnalysisProvenance{TokenUsage: totalUsage}, classified
 		}
 		if err := analyzer.waitBeforeRetry(ctx, attempt, classified.ResetAt); err != nil {
-			return AnalysisResult{}, AnalysisProvenance{}, asAnalysisError(err)
+			return AnalysisResult{}, AnalysisProvenance{TokenUsage: totalUsage}, asAnalysisError(err)
 		}
 	}
 
-	return AnalysisResult{}, AnalysisProvenance{}, lastErr
+	return AnalysisResult{}, AnalysisProvenance{TokenUsage: totalUsage}, lastErr
+}
+
+func parseTokenUsage(value string) importer.TokenUsage {
+	if value == "" {
+		return importer.TokenUsage{}
+	}
+	var usage struct {
+		InputTokens           int64 `json:"inputTokens"`
+		CachedInputTokens     int64 `json:"cachedInputTokens"`
+		CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
+		OutputTokens          int64 `json:"outputTokens"`
+		ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+		TotalTokens           int64 `json:"totalTokens"`
+	}
+	if err := json.Unmarshal([]byte(value), &usage); err != nil ||
+		usage.InputTokens < 0 || usage.CachedInputTokens < 0 ||
+		usage.CacheWriteInputTokens < 0 || usage.OutputTokens < 0 ||
+		usage.ReasoningOutputTokens < 0 || usage.TotalTokens < 0 {
+		return importer.TokenUsage{}
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+
+	return importer.TokenUsage{
+		InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens, OutputTokens: usage.OutputTokens,
+		ReasoningOutputTokens: usage.ReasoningOutputTokens, TotalTokens: usage.TotalTokens,
+	}
 }
 
 func analysisFailureLogAttrs(err *AnalysisError) []any {

@@ -43,6 +43,7 @@ func (coordinator *Coordinator) worker(
 func (coordinator *Coordinator) processItem(ctx context.Context, work workItem) itemResult {
 	result := itemResult{
 		sourceID: work.source.ID,
+		itemID:   work.item.ID,
 		path:     work.sourcePath,
 		itemName: work.item.ZIPEntryName,
 	}
@@ -89,7 +90,8 @@ func (coordinator *Coordinator) processItem(ctx context.Context, work workItem) 
 		return coordinator.duplicateResult(ctx, work, item, reservation.asset)
 	}
 
-	asset, processErr := coordinator.processReservedItem(ctx, work, &item, staged)
+	asset, tokenUsage, processErr := coordinator.processReservedItem(ctx, work, &item, staged)
+	result.tokenUsage = tokenUsage
 	coordinator.finishReservation(staged.Digest, reservation, asset, processErr)
 	if processErr != nil {
 		if errors.Is(processErr, context.Canceled) || errors.Is(processErr, context.DeadlineExceeded) {
@@ -142,10 +144,10 @@ func (coordinator *Coordinator) processReservedItem(
 	work workItem,
 	item *ItemRecord,
 	staged StagedFile,
-) (AssetRef, error) {
+) (AssetRef, TokenUsage, error) {
 	file, err := coordinator.store.OpenStaged(staged.Path)
 	if err != nil {
-		return AssetRef{}, fmt.Errorf("opening staged image: %w", err)
+		return AssetRef{}, TokenUsage{}, fmt.Errorf("opening staged image: %w", err)
 	}
 	limits := coordinator.config.InspectionLimits
 	limits.ExpectedExtension = work.extension
@@ -154,19 +156,23 @@ func (coordinator *Coordinator) processReservedItem(
 	if inspectErr != nil || closeErr != nil {
 		joined := errors.Join(inspectErr, closeErr)
 		if inspectErr != nil {
-			return AssetRef{}, itemError(
+			return AssetRef{}, TokenUsage{}, itemError(
 				ErrorCodeInvalidInput,
 				"image is invalid or exceeds configured safety limits",
 				joined,
 			)
 		}
-		return AssetRef{}, itemError(ErrorCodeStorage, "staged image could not be closed", joined)
+		return AssetRef{}, TokenUsage{}, itemError(
+			ErrorCodeStorage, "staged image could not be closed", joined,
+		)
 	}
 	if err := coordinator.repository.TransitionImportItem(ctx, ItemTransition{
 		ID: item.ID, From: ItemStateStaged, To: ItemStateAnalyzing,
 		UpdatedAt: coordinator.now().UTC(),
 	}); err != nil {
-		return AssetRef{}, itemError(ErrorCodeStorage, "analysis state could not be recorded", err)
+		return AssetRef{}, TokenUsage{}, itemError(
+			ErrorCodeStorage, "analysis state could not be recorded", err,
+		)
 	}
 	item.State = ItemStateAnalyzing
 
@@ -174,7 +180,9 @@ func (coordinator *Coordinator) processReservedItem(
 		item.ID, inspection.Analysis.Extension, inspection.Analysis.Data,
 	)
 	if err != nil {
-		return AssetRef{}, itemError(ErrorCodeStorage, "analysis rendition could not be staged", err)
+		return AssetRef{}, TokenUsage{}, itemError(
+			ErrorCodeStorage, "analysis rendition could not be staged", err,
+		)
 	}
 	defer func() {
 		if removeErr := coordinator.store.RemoveAnalysisScratch(item.ID); removeErr != nil {
@@ -186,7 +194,7 @@ func (coordinator *Coordinator) processReservedItem(
 		DisplayWidth: inspection.DisplayWidth, DisplayHeight: inspection.DisplayHeight,
 	})
 	if err != nil {
-		return AssetRef{}, itemError(
+		return AssetRef{}, provenance.TokenUsage, itemError(
 			ErrorCodeCodexUnavailable,
 			"semantic analysis failed; check Codex configuration and restart",
 			err,
@@ -194,15 +202,21 @@ func (coordinator *Coordinator) processReservedItem(
 	}
 	assetID, err := newWorkflowID()
 	if err != nil {
-		return AssetRef{}, itemError(ErrorCodeInternal, "asset identifier could not be generated", err)
+		return AssetRef{}, provenance.TokenUsage, itemError(
+			ErrorCodeInternal, "asset identifier could not be generated", err,
+		)
 	}
 	managedPath, err := managedAssetPath(analysis, inspection.Format, staged.Digest)
 	if err != nil {
-		return AssetRef{}, itemError(ErrorCodeInternal, "managed asset path could not be created", err)
+		return AssetRef{}, provenance.TokenUsage, itemError(
+			ErrorCodeInternal, "managed asset path could not be created", err,
+		)
 	}
 	colors, err := json.Marshal(inspection.DominantColors)
 	if err != nil {
-		return AssetRef{}, itemError(ErrorCodeInternal, "dominant colors could not be encoded", err)
+		return AssetRef{}, provenance.TokenUsage, itemError(
+			ErrorCodeInternal, "dominant colors could not be encoded", err,
+		)
 	}
 	now := coordinator.now().UTC()
 	asset := StagedAsset{
@@ -227,19 +241,27 @@ func (coordinator *Coordinator) processReservedItem(
 		Tags: append([]Tag(nil), analysis.Tags...), AIRun: provenance.Run, CreatedAt: now,
 	}
 	if err := coordinator.repository.CommitStagedAsset(ctx, asset); err != nil {
-		return AssetRef{}, itemError(ErrorCodeStorage, "asset metadata could not be committed", err)
+		return AssetRef{}, provenance.TokenUsage, itemError(
+			ErrorCodeStorage, "asset metadata could not be committed", err,
+		)
 	}
 	item.State = ItemStateCommitting
 	item.AssetID = assetID
 	if err := coordinator.store.Promote(ctx, staged, managedPath); err != nil {
-		return AssetRef{}, itemError(ErrorCodeStorage, "managed original could not be promoted", err)
+		return AssetRef{}, provenance.TokenUsage, itemError(
+			ErrorCodeStorage, "managed original could not be promoted", err,
+		)
 	}
 	if err := coordinator.repository.MarkAssetReady(ctx, assetID, item.ID, coordinator.now().UTC()); err != nil {
-		return AssetRef{}, itemError(ErrorCodeStorage, "asset readiness could not be committed", err)
+		return AssetRef{}, provenance.TokenUsage, itemError(
+			ErrorCodeStorage, "asset readiness could not be committed", err,
+		)
 	}
 	item.State = ItemStateReady
 
-	return AssetRef{ID: assetID, Digest: staged.Digest, ManagedPath: managedPath}, nil
+	return AssetRef{
+		ID: assetID, Digest: staged.Digest, ManagedPath: managedPath,
+	}, provenance.TokenUsage, nil
 }
 
 func (coordinator *Coordinator) duplicateResult(
@@ -249,7 +271,7 @@ func (coordinator *Coordinator) duplicateResult(
 	asset AssetRef,
 ) itemResult {
 	result := itemResult{
-		sourceID: work.source.ID, path: work.sourcePath,
+		sourceID: work.source.ID, itemID: work.item.ID, path: work.sourcePath,
 		itemName: work.item.ZIPEntryName, state: ItemStateDuplicate,
 	}
 	if asset.ID.IsZero() {
