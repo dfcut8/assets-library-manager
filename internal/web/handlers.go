@@ -214,13 +214,26 @@ func (s *server) metadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) reveal(w http.ResponseWriter, r *http.Request) {
+	s.openOriginal(w, r, s.dependencies.Files.Reveal, "asset-revealed")
+}
+
+func (s *server) view(w http.ResponseWriter, r *http.Request) {
+	s.openOriginal(w, r, s.dependencies.Files.Open, "asset-opened")
+}
+
+func (s *server) openOriginal(
+	w http.ResponseWriter,
+	r *http.Request,
+	launch func(context.Context, string) error,
+	event string,
+) {
 	id, ok := s.parseID(w, r)
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, revealBodyLimit)
+	r.Body = http.MaxBytesReader(w, r.Body, fileActionBodyLimit)
 	if err := r.ParseForm(); err != nil {
-		s.renderError(w, r, http.StatusRequestEntityTooLarge, "Reveal request is too large.")
+		s.renderError(w, r, http.StatusRequestEntityTooLarge, "File action request is too large.")
 		return
 	}
 	ctx, cancel := handlerContext(r)
@@ -231,12 +244,12 @@ func (s *server) reveal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.renderError(w, r, http.StatusInternalServerError, "Unable to reveal the original.")
+		s.renderError(w, r, http.StatusInternalServerError, "Unable to open the original.")
 		return
 	}
 	managedPath, err := importer.NewManagedPath(original.ManagedPath)
 	if err != nil {
-		s.renderError(w, r, http.StatusInternalServerError, "Unable to reveal the original.")
+		s.renderError(w, r, http.StatusInternalServerError, "Unable to open the original.")
 		return
 	}
 	file, err := s.dependencies.Managed.OpenManaged(managedPath)
@@ -246,15 +259,15 @@ func (s *server) reveal(w http.ResponseWriter, r *http.Request) {
 	}
 	filePath := file.Name()
 	if closeErr := file.Close(); closeErr != nil {
-		s.renderError(w, r, http.StatusInternalServerError, "Unable to reveal the original.")
+		s.renderError(w, r, http.StatusInternalServerError, "Unable to open the original.")
 		return
 	}
-	if err := s.dependencies.Revealer.Reveal(ctx, filePath); err != nil {
-		s.renderError(w, r, http.StatusInternalServerError, "Unable to reveal the original.")
+	if err := launch(ctx, filePath); err != nil {
+		s.renderError(w, r, http.StatusInternalServerError, "Unable to open the original.")
 		return
 	}
 	if isHTMX(r) {
-		w.Header().Set("HX-Trigger", "asset-revealed")
+		w.Header().Set("HX-Trigger", event)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

@@ -66,7 +66,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	application := app.New(logger, platform.Browser{}, platform.Revealer{}, codex.NewStarter())
+	application := app.New(logger, platform.Browser{}, platform.FileLauncher{}, codex.NewStarter())
 	if err := application.Run(ctx, root); err != nil {
 		logger.Error("application stopped with an error", "error", err)
 		return 1
