@@ -43,6 +43,15 @@ func TestCatalogRoutesRenderAndRespectHTMX(t *testing.T) {
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "Edit metadata") {
 		t.Fatalf("detail = %d %q", detail.Code, detail.Body.String())
 	}
+	for _, previewMarkup := range []string{
+		`data-preview-open`,
+		`data-preview-dialog`,
+		`src="/static/asset-preview.js"`,
+	} {
+		if !strings.Contains(detail.Body.String(), previewMarkup) {
+			t.Fatalf("detail does not include asset preview markup %q: %q", previewMarkup, detail.Body.String())
+		}
+	}
 }
 
 func TestCatalogControlsUpdateAutomaticallyAndPreserveQuery(t *testing.T) {

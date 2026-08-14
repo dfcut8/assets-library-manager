@@ -1,11 +1,12 @@
 {{define "detail.html"}}
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Detail.Title}} · Asset Library Manager</title><link rel="stylesheet" href="/static/app.css"><script src="/static/htmx-2.0.9.min.js" defer></script></head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Detail.Title}} · Asset Library Manager</title><link rel="stylesheet" href="/static/app.css"><script src="/static/htmx-2.0.9.min.js" defer></script><script src="/static/asset-preview.js" defer></script></head>
 <body><main class="shell"><header class="site-header"><a href="/assets" class="brand">Asset Library Manager</a><a href="/processing">Processing</a></header>{{template "asset-detail" .}}</main></body></html>
 {{end}}
 
 {{define "asset-detail"}}
 <article class="asset-detail">
-  <p><a href="/assets">← Catalog</a></p><div class="detail-hero"><img src="/assets/{{.Detail.ID}}/thumbnail" alt=""><div><h1>{{.Detail.Title}}</h1><p>{{.Detail.Description}}</p><p>{{.Detail.PrimaryType}} · {{.Detail.Style}} · {{.Detail.DisplayWidth}}×{{.Detail.DisplayHeight}} · {{.Detail.Format}}</p><p><a class="button" href="/assets/{{.Detail.ID}}/download">Download original</a></p></div></div>
+  <p><a href="/assets">← Catalog</a></p><div class="detail-hero"><button class="asset-preview-trigger" type="button" aria-label="Open larger preview of {{.Detail.Title}}" aria-haspopup="dialog" data-preview-open><img src="/assets/{{.Detail.ID}}/thumbnail" alt=""></button><div><h1>{{.Detail.Title}}</h1><p>{{.Detail.Description}}</p><p>{{.Detail.PrimaryType}} · {{.Detail.Style}} · {{.Detail.DisplayWidth}}×{{.Detail.DisplayHeight}} · {{.Detail.Format}}</p><p><a class="button" href="/assets/{{.Detail.ID}}/download">Download original</a></p></div></div>
+  <dialog class="asset-preview" aria-label="Preview of {{.Detail.Title}}" data-preview-dialog><button class="asset-preview-close" type="button" aria-label="Close preview" data-preview-close>×</button><img src="/assets/{{.Detail.ID}}/thumbnail" alt="{{.Detail.Title}}"></dialog>
   {{if .Detail.EncodedAnimated}}<p class="notice">This file contains encoded animation; the thumbnail shows its first frame.</p>{{end}}
   {{template "metadata-form" .}}
   <form method="post" action="/assets/{{.Detail.ID}}/reveal"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">Reveal in file manager</button></form>
