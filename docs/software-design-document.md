@@ -391,6 +391,8 @@ The coordinator is the sole owner of source aggregation and deletion decisions. 
 - Record unsupported, unreadable, or mismatched files as failed sources and leave them untouched.
 - Do not follow hard-link or symlink targets discovered inside an archive.
 
+An import source is identified by its canonical path relative to `incoming/` together with the full discovery fingerprint. Re-copying identical bytes under the same name resumes the existing source history, while different bytes under a reused name create a new source. The path alone is not a permanent identity.
+
 ### 8.3 Per-image processing
 
 ```mermaid
@@ -709,7 +711,7 @@ Database migrations are embedded, ordered, checksum-verified, transactional wher
 | `thumbnails` | One-to-one asset ID; `image/png`; width; height; byte length; BLOB; foreign key with cascade. |
 | `tags` | UUID or integer key; unique `(facet, slug)`; display label. |
 | `asset_tags` | Unique asset/tag pair; origin (`ai`, `deterministic`, or `user`); timestamps. |
-| `import_sources` | Canonical source path relative to `incoming/`; type; discovery fingerprint; aggregate state; deletion state; retained/error reason; timestamps. |
+| `import_sources` | Unique `(canonical source path relative to incoming, discovery fingerprint)` identity; type; aggregate state; deletion state; retained/error reason; timestamps. |
 | `import_items` | Source ID; ZIP entry name when applicable; staged path; SHA-256; linked asset ID; state; attempt count; error code and bounded message. |
 | `ai_runs` | Import item and optional asset ID; provider/model parameters; prompt/schema versions; response/request identifiers; usage; latency; outcome; bounded sanitized error. |
 | `schema_migrations` | Migration version, checksum, and applied time. |

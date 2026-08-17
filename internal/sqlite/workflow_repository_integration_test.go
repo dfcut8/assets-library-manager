@@ -42,7 +42,7 @@ func TestWorkflowWriterGateAllowsWALReadsAndHonorsQueuedCancellation(t *testing.
 	}()
 	<-writerStarted
 
-	read, err := database.FindImportSourceByPath(ctx, source.Path)
+	read, err := database.FindImportSource(ctx, source.Path, source.DiscoveryFingerprint)
 	if err != nil {
 		t.Fatalf("WAL read during write error = %v", err)
 	}
@@ -87,17 +87,31 @@ func TestWorkflowRepositorySourceIdentityAndTransitions(t *testing.T) {
 	changed := source
 	changed.ID = integrationID(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	changed.DiscoveryFingerprint = importer.NewDigest(sha256.Sum256([]byte("replacement")))
-	retained, err := database.CreateImportSource(ctx, changed)
-	if !errors.Is(err, importer.ErrSourceChanged) {
+	createdReplacement, err := database.CreateImportSource(ctx, changed)
+	if err != nil {
 		t.Fatalf("CreateImportSource(changed) error = %v", err)
 	}
-	if retained.State != importer.SourceStateRetained || retained.ErrorCode != importer.ErrorCodeSourceChanged {
-		t.Fatalf("CreateImportSource(changed) = %+v", retained)
+	if createdReplacement != changed {
+		t.Fatalf("CreateImportSource(changed) = %+v, want %+v", createdReplacement, changed)
 	}
-	found, err := database.FindImportSourceByPath(ctx, source.Path)
-	if err != nil || found.ID != source.ID || found.DiscoveryFingerprint != source.DiscoveryFingerprint ||
-		found.State != importer.SourceStateRetained {
-		t.Fatalf("FindImportSourceByPath() = %+v, %v", found, err)
+	foundOriginal, err := database.FindImportSource(ctx, source.Path, source.DiscoveryFingerprint)
+	if err != nil || foundOriginal != source {
+		t.Fatalf("FindImportSource(original) = %+v, %v", foundOriginal, err)
+	}
+	foundReplacement, err := database.FindImportSource(
+		ctx, changed.Path, changed.DiscoveryFingerprint,
+	)
+	if err != nil || foundReplacement != changed {
+		t.Fatalf("FindImportSource(replacement) = %+v, %v", foundReplacement, err)
+	}
+	var sourceCount int
+	if err := database.db.QueryRowContext(
+		ctx, "SELECT count(*) FROM import_sources WHERE source_path = ?", source.Path.String(),
+	).Scan(&sourceCount); err != nil {
+		t.Fatal(err)
+	}
+	if sourceCount != 2 {
+		t.Fatalf("reused path source count = %d, want 2", sourceCount)
 	}
 
 	item := importer.ItemRecord{
