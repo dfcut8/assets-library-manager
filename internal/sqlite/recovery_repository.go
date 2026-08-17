@@ -175,7 +175,7 @@ func (d *Database) ListPendingDeletions(
 		SELECT id, source_path, discovery_fingerprint, state, deletion_state
 		FROM import_sources
 		WHERE deletion_state IN ('eligible', 'pending', 'failed')
-		ORDER BY source_path
+		ORDER BY source_path, discovered_at, id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("listing pending source deletions: %w", err)

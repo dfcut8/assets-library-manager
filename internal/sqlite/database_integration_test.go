@@ -5,11 +5,16 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/dfcut8/assets-library-manager/internal/importer"
 )
 
 func TestOpenCreatesMigratesVerifiesAndReopens(t *testing.T) {
@@ -38,6 +43,139 @@ func TestOpenCreatesMigratesVerifiesAndReopens(t *testing.T) {
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenMigratesImportSourceIdentityWithoutDataLoss(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "assets.db")
+	initialMigration, err := migrationFiles.ReadFile("migrations/001_initial.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Files := fstest.MapFS{
+		"migrations/001_initial.sql": {Data: initialMigration},
+	}
+	v1Database, err := sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v1Database.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyMigrations(ctx, v1Database, v1Files); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	sourceID := strings.Repeat("a", 32)
+	itemID := strings.Repeat("b", 32)
+	runID := strings.Repeat("c", 32)
+	fingerprint := strings.Repeat("1", 64)
+	if _, err := v1Database.ExecContext(ctx, `
+		INSERT INTO import_sources(
+			id, source_path, source_type, discovery_fingerprint, state,
+			deletion_state, discovered_at, updated_at
+		) VALUES(?, 'reused.png', 'loose', ?, 'deleted', 'deleted', ?, ?)
+	`, sourceID, fingerprint, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v1Database.ExecContext(ctx, `
+		INSERT INTO import_items(
+			id, source_id, state, attempt_count, created_at, updated_at
+		) VALUES(?, ?, 'failed', 2, ?, ?)
+	`, itemID, sourceID, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v1Database.ExecContext(ctx, `
+		INSERT INTO ai_runs(
+			id, import_item_id, provider, model, reasoning_effort, image_detail,
+			prompt_version, schema_version, attempt_number, started_at, outcome
+		) VALUES(?, ?, 'openai', 'test-model', 'medium', 'auto', 'v1', 'v1', 2, ?, 'permanent-error')
+	`, runID, itemID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := v1Database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v1) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	assertDatabaseState(t, database)
+
+	var preserved int
+	if err := database.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM import_sources AS source
+		JOIN import_items AS item ON item.source_id = source.id
+		JOIN ai_runs AS run ON run.import_item_id = item.id
+		WHERE source.id = ? AND item.id = ? AND run.id = ? AND item.attempt_count = 2
+	`, sourceID, itemID, runID).Scan(&preserved); err != nil {
+		t.Fatal(err)
+	}
+	if preserved != 1 {
+		t.Fatalf("preserved workflow count = %d, want 1", preserved)
+	}
+
+	rows, err := database.db.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table, rowID, parent, foreignKey any
+		if err := rows.Scan(&table, &rowID, &parent, &foreignKey); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("foreign key violation: table=%v row=%v parent=%v key=%v", table, rowID, parent, foreignKey)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcePath, err := importer.NewSourcePath("reused.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementNow := time.Now().UTC()
+	replacement := importer.SourceRecord{
+		ID: integrationID(t, strings.Repeat("d", 32)), Path: sourcePath,
+		Type:                 importer.SourceTypeLoose,
+		DiscoveryFingerprint: importer.NewDigest(sha256.Sum256([]byte("replacement"))),
+		State:                importer.SourceStateDiscovered, DeletionState: importer.DeletionStateNotEligible,
+		DiscoveredAt: replacementNow, UpdatedAt: replacementNow,
+	}
+	if created, err := database.CreateImportSource(ctx, replacement); err != nil || created != replacement {
+		t.Fatalf("CreateImportSource(reused path) = %+v, %v", created, err)
+	}
+
+	if _, err := database.db.ExecContext(ctx, "DELETE FROM import_sources WHERE id = ?", sourceID); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		name  string
+		query string
+		id    string
+	}{
+		{name: "import_items", query: "SELECT count(*) FROM import_items WHERE id = ?", id: itemID},
+		{name: "ai_runs", query: "SELECT count(*) FROM ai_runs WHERE id = ?", id: runID},
+	} {
+		var count int
+		if err := database.db.QueryRowContext(ctx, check.query, check.id).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("cascaded %s count = %d, want 0", check.name, count)
+		}
 	}
 }
 
@@ -156,7 +294,7 @@ func assertDatabaseState(t *testing.T, database *Database) {
 	if err := database.db.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatal(err)
 	}
-	if migrations != 1 {
-		t.Fatalf("migration count = %d, want 1", migrations)
+	if migrations != 2 {
+		t.Fatalf("migration count = %d, want 2", migrations)
 	}
 }

@@ -367,7 +367,7 @@ func classifyProcessingFailure(err error) (ErrorCode, string) {
 	switch {
 	case errors.Is(err, ErrSourceChanged):
 		return ErrorCodeSourceChanged,
-			"source bytes changed after discovery; rename the replacement before importing"
+			"source bytes changed after discovery; restart to reconsider the current file"
 	case errors.Is(err, imageinspect.ErrUnsupportedFormat),
 		errors.Is(err, imageinspect.ErrFormatMismatch),
 		errors.Is(err, imageinspect.ErrSourceLimit),

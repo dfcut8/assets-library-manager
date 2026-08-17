@@ -23,40 +23,20 @@ const (
 	workflowTableSources
 )
 
-// CreateImportSource inserts a newly discovered source or returns the matching persisted source.
+// CreateImportSource inserts a newly discovered source or returns the matching persisted identity.
 func (d *Database) CreateImportSource(
 	ctx context.Context,
 	input importer.SourceRecord,
-) (record importer.SourceRecord, returnErr error) {
+) (importer.SourceRecord, error) {
 	if err := validateSourceRecord(input); err != nil {
 		return importer.SourceRecord{}, err
 	}
-	sourceChanged := false
-	returnErr = d.withWriteTx(ctx, func(tx *sql.Tx) error {
-		existing, err := querySourceByPath(ctx, tx, input.Path)
+	var record importer.SourceRecord
+	err := d.withWriteTx(ctx, func(tx *sql.Tx) error {
+		existing, err := querySourceByIdentity(
+			ctx, tx, input.Path, input.DiscoveryFingerprint,
+		)
 		if err == nil {
-			if existing.DiscoveryFingerprint != input.DiscoveryFingerprint {
-				const message = "source bytes changed after the path was recorded; rename the replacement to import it"
-				if _, err := tx.ExecContext(ctx, `
-					UPDATE import_sources
-					SET state = 'retained', deletion_state = 'not-eligible',
-						retained_reason = ?, error_code = ?, error_message = ?, updated_at = ?
-					WHERE id = ?
-				`, message, string(importer.ErrorCodeSourceChanged), message,
-					formatTime(input.UpdatedAt), existing.ID.String()); err != nil {
-					return fmt.Errorf("retaining changed import source: %w", err)
-				}
-				existing.State = importer.SourceStateRetained
-				existing.DeletionState = importer.DeletionStateNotEligible
-				existing.RetainedReason = message
-				existing.ErrorCode = importer.ErrorCodeSourceChanged
-				existing.ErrorMessage = message
-				existing.UpdatedAt = input.UpdatedAt
-				record = existing
-				sourceChanged = true
-
-				return nil
-			}
 			record = existing
 
 			return nil
@@ -82,19 +62,17 @@ func (d *Database) CreateImportSource(
 
 		return nil
 	})
-	if returnErr == nil && sourceChanged {
-		return record, fmt.Errorf("reserving import source: %w", importer.ErrSourceChanged)
-	}
 
-	return record, returnErr
+	return record, err
 }
 
-// FindImportSourceByPath returns the current source record for an incoming path.
-func (d *Database) FindImportSourceByPath(
+// FindImportSource returns the source record for an incoming path and fingerprint.
+func (d *Database) FindImportSource(
 	ctx context.Context,
 	path importer.SourcePath,
+	fingerprint importer.Digest,
 ) (importer.SourceRecord, error) {
-	return querySourceByPath(ctx, d.db, path)
+	return querySourceByIdentity(ctx, d.db, path, fingerprint)
 }
 
 // CreateImportItem inserts a discovered image item or returns its existing durable record.
@@ -289,14 +267,20 @@ const sourceSelect = `
 		discovered_at, updated_at
 	FROM import_sources`
 
-func querySourceByPath(
+func querySourceByIdentity(
 	ctx context.Context,
 	queryer interface {
 		QueryRowContext(context.Context, string, ...any) *sql.Row
 	},
 	path importer.SourcePath,
+	fingerprint importer.Digest,
 ) (importer.SourceRecord, error) {
-	record, err := scanSource(queryer.QueryRowContext(ctx, sourceSelect+" WHERE source_path = ?", path.String()))
+	record, err := scanSource(queryer.QueryRowContext(
+		ctx,
+		sourceSelect+" WHERE source_path = ? AND discovery_fingerprint = ?",
+		path.String(),
+		fingerprint.String(),
+	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return importer.SourceRecord{}, importer.ErrNotFound
 	}

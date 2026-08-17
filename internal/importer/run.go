@@ -476,7 +476,7 @@ func (coordinator *Coordinator) recordSourcePreparationFailure(
 	message := "source could not be prepared"
 	code := ErrorCodeStorage
 	if errors.Is(err, ErrSourceChanged) {
-		message = "source bytes changed after this path was recorded; rename it to import the replacement"
+		message = "source bytes changed while it was being prepared; restart to reconsider the current file"
 		code = ErrorCodeSourceChanged
 	}
 	coordinator.addFailure(ProgressFailure{

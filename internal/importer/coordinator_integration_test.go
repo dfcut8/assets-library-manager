@@ -117,6 +117,105 @@ func TestCoordinatorDeletesSuccessfullyProcessedLooseAndZIPSources(t *testing.T)
 	}
 }
 
+func TestCoordinatorDeletesReusedIncomingFilename(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	cfg := config.Default()
+	paths, err := storage.Prepare(root, cfg.Storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := sqlite.Open(ctx, paths.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.OpenStore(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	const sourceName = "reused.png"
+	sourceFile := filepath.Join(paths.Incoming, sourceName)
+	sourcePath, err := importer.NewSourcePath(sourceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &acceptingAnalyzer{}
+	runScan := func() importer.Progress {
+		coordinator, err := importer.NewCoordinator(
+			coordinatorConfig(cfg), database, store, imageinspect.New(), analyzer, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Recover(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(sourceFile); !os.IsNotExist(err) {
+			t.Fatalf("source still exists after scan: %v", err)
+		}
+
+		return coordinator.Snapshot()
+	}
+
+	writeTestPNGColor(t, sourceFile, color.NRGBA{B: 255, A: 255})
+	firstDigest, _, err := store.FingerprintIncoming(ctx, sourcePath, cfg.Processing.MaxSourceBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProgress := runScan()
+	if firstProgress.ItemsReady != 1 || firstProgress.SourcesDeleted != 1 {
+		t.Fatalf("first progress = %#v", firstProgress)
+	}
+	if got := analyzer.calls.Load(); got != 1 {
+		t.Fatalf("Analyze calls after first source = %d, want 1", got)
+	}
+
+	writeTestPNGColor(t, sourceFile, color.NRGBA{B: 255, A: 255})
+	repeatedProgress := runScan()
+	if repeatedProgress.ItemsReady != 1 || repeatedProgress.SourcesDeleted != 1 {
+		t.Fatalf("repeated progress = %#v", repeatedProgress)
+	}
+	if got := analyzer.calls.Load(); got != 1 {
+		t.Fatalf("Analyze calls after identical source = %d, want 1", got)
+	}
+
+	writeTestPNGColor(t, sourceFile, color.NRGBA{R: 255, A: 255})
+	replacementDigest, _, err := store.FingerprintIncoming(
+		ctx, sourcePath, cfg.Processing.MaxSourceBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementDigest == firstDigest {
+		t.Fatal("replacement digest unexpectedly matched first source")
+	}
+	replacementProgress := runScan()
+	if replacementProgress.ItemsReady != 1 || replacementProgress.SourcesDeleted != 1 {
+		t.Fatalf("replacement progress = %#v", replacementProgress)
+	}
+	if got := analyzer.calls.Load(); got != 2 {
+		t.Fatalf("Analyze calls after replacement source = %d, want 2", got)
+	}
+	for _, digest := range []importer.Digest{firstDigest, replacementDigest} {
+		if _, err := database.FindReadyByDigest(ctx, digest); err != nil {
+			t.Fatalf("FindReadyByDigest(%s) error = %v", digest, err)
+		}
+	}
+}
+
 type acceptingAnalyzer struct {
 	calls atomic.Int32
 }
@@ -168,6 +267,11 @@ func coordinatorConfig(cfg config.Config) importer.CoordinatorConfig {
 
 func writeTestPNG(t *testing.T, filePath string) {
 	t.Helper()
+	writeTestPNGColor(t, filePath, color.NRGBA{B: 255, A: 255})
+}
+
+func writeTestPNGColor(t *testing.T, filePath string, pixel color.NRGBA) {
+	t.Helper()
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +279,7 @@ func writeTestPNG(t *testing.T, filePath string) {
 	imageData := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 	for y := range 4 {
 		for x := range 4 {
-			imageData.SetNRGBA(x, y, color.NRGBA{B: 255, A: 255})
+			imageData.SetNRGBA(x, y, pixel)
 		}
 	}
 	encodeErr := png.Encode(file, imageData)
